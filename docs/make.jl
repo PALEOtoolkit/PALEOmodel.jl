@@ -9,8 +9,12 @@ bib = CitationBibliography("src/paleo_references.bib")
 makedocs(bib, sitename="PALEOmodel Documentation", 
         pages = [
             "index.md",
-            "Mathematical Formulation" => [
+            "Design" => [
                 "MathematicalFormulation.md",
+            ],
+            "HOWTOs" => [
+                "HOWTOshowmodelandoutput.md",
+                "HOWTOsmallnegativevalues.md",
             ],
             "Reference" => [
                 "PALEOmodel.md",
