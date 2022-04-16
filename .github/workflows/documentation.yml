@@ -16,7 +16,7 @@ jobs:
         with:
           version: '1.6'
       - name: Bodge unregistered packages
-        run: julia --project=docs/ -e 'using Pkg; Pkg.add(url="https://github.com/PALEOtoolkit/PALEOboxes.jl"'
+        run: julia --project=docs/ -e 'using Pkg; Pkg.add(url="https://github.com/PALEOtoolkit/PALEOboxes.jl")'
       - name: Install dependencies
         run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - name: Build and deploy
