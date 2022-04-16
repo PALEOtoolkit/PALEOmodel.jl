@@ -165,7 +165,7 @@ function get_array(
             # find ridx corresponding to a coordinate
             for cr in fr.coords_record
                 if String(k) == cr.name
-                    ridx, cvalue = find_indices(cr.values, v)
+                    ridx, cvalue = PB.find_indices(cr.values, v)
                     selectargs_records=NamedTuple((k=>cvalue,))
                 end
             end            
