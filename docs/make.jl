@@ -4,7 +4,7 @@ import PALEOmodel
 
 using DocumenterCitations
 
-bib = CitationBibliography("src/paleo_references.bib")
+bib = CitationBibliography(joinpath(@__DIR__, "src/paleo_references.bib"))
 
 makedocs(bib, sitename="PALEOmodel Documentation", 
         pages = [
@@ -25,7 +25,6 @@ makedocs(bib, sitename="PALEOmodel Documentation",
         format = Documenter.HTML(
             prettyurls = get(ENV, "CI", nothing) == "true"
         ),
-        repo = "https://github.com/sjdaines/PALEOdev.jl/blob/master/{path}#{line}")
 
 @info "Local html documentation is available at $(joinpath(@__DIR__, "build/index.html"))"
 
