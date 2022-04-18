@@ -15,10 +15,8 @@ jobs:
       - uses: julia-actions/setup-julia@latest
         with:
           version: '1.6'
-      - name: Bodge unregistered packages
-        run: julia --project=docs/ -e 'using Pkg; Pkg.develop([PackageSpec(path=pwd()), PackageSpec(url="https://github.com/PALEOtoolkit/PALEOboxes.jl")])'
-      # - name: Install dependencies
-      #   run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - name: Install dependencies
+        run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - name: Build and deploy
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # If authenticating with GitHub Actions token

@@ -25,6 +25,7 @@ makedocs(bib, sitename="PALEOmodel Documentation",
         format = Documenter.HTML(
             prettyurls = get(ENV, "CI", nothing) == "true"
         ),
+)
 
 @info "Local html documentation is available at $(joinpath(@__DIR__, "build/index.html"))"
 
