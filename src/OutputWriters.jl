@@ -86,6 +86,11 @@ function PB.add_field!(output::PALEOmodel.AbstractOutputWriter, fr::PALEOmodel.F
     OutputMemoryDomain
 
 In-memory model output, for one model Domain.
+
+Includes an additional `coords_record` (usually `:tmodel`, when storing output vs time).
+
+# Implementation
+`data::DataFrame` contains columns of same type as `FieldRecord.records` for each Variable.
 """
 mutable struct OutputMemoryDomain
     "Domain name"
@@ -165,18 +170,20 @@ function OutputMemoryDomain(
 
     # add variables
     for var in odom._all_vars
-        values = PB.get_data_output(var, modeldata)
-        if length(values) == 1
-            # save as Vector of scalars
-            arraytype = eltype(values)
+        # records storage type is that of FieldRecord.records
+        field = PB.get_field(var, modeldata)
+        if PALEOmodel.field_single_element(field)
+            # if Field contains single elements, store as a Vector of elements
+            records = Vector{eltype(field.values)}(undef, nrecords)
         else
-            # save as Vector of arrays
-            arraytype = typeof(values)
+            # if Field contains something else, store as a Vector of those things
+            records = Vector{typeof(field.values)}(undef, nrecords)
         end
+       
         DataFrames.insertcols!(
             odom.data, 
             DataFrames.ncol(odom.data)+1, 
-            Symbol(var.name) => Vector{arraytype}(undef, nrecords)
+            Symbol(var.name) => records
         )            
 
         attrbs = deepcopy(var.attributes)
@@ -261,9 +268,10 @@ function add_record!(odom::OutputMemoryDomain, modeldata, rec_coord)
     df[!, odom.coords_record][odom._nrecs] = rec_coord
 
     for var in odom._all_vars
-        values = PB.get_data_output(var, modeldata)
+        field = PB.get_field(var, modeldata)
+        values = PB.get_values_output(field)
         
-        if length(values) == 1
+        if PALEOmodel.field_single_element(field)
             df[!, Symbol(var.name)][odom._nrecs] = values[]
         else
             # copy array(s) data                           
