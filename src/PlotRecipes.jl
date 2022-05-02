@@ -25,7 +25,7 @@ Optional `kwargs` provides keyword arguments supplied to `plot`
     julia> pp(:newpage) # flush any partial screen and start new page (NB: always add this at end of a sequence!)
 
 # Commands
-- `pp(p::AbstractPlot)`: accumulate plot p
+- `pp(p)`: accumulate plot p
 - `pp(:skip)`: leave a blank panel
 - `pp(:newpage)`: fill with blank panels and start new page
 - `pp(p1, p2, ...)`: multiple plots/commands in one call 
@@ -115,11 +115,9 @@ end
 ###############################
 
 """
-    @recipe function f(output::AbstractOutputWriter, vars::Union{AbstractString, Vector}, selectargs::NamedTuple=NamedTuple())
+    plot(output::AbstractOutputWriter, vars::Union{AbstractString, Vector{<:AbstractString}}, selectargs::NamedTuple=NamedTuple())
 
-Plot recipe that calls `PB.get_field(output, var)`
-
-and passes on to `@recipe function f(fr::FieldRecord, selectargs::NamedTuple)`
+Plot recipe that calls `PB.get_field(output, var)`, and passes on to `plot(fr::FieldRecord, selectargs)`
 
 Additional features:
 - if `vars` is a Vector, create a plot series for each element.
@@ -152,10 +150,10 @@ RecipesBase.@recipe function f(
 end
 
 """
-    @recipe function f(outputs::Vector{<:AbstractOutputWriter}, vars::Union{AbstractString, Vector}, selectargs::NamedTuple=NamedTuple())
+    plot(outputs::Vector{<:AbstractOutputWriter}, vars::Union{AbstractString, Vector{<:AbstractString}}, selectargs::NamedTuple=NamedTuple())
 
-Pass through (ie "broadcast") each element of `output` to
-`@recipe function f(output::AbstractOutputWriter, vars::Union{AbstractString, Vector}, selectargs::NamedTuple=NamedTuple())`,
+Pass through (ie "broadcast") each element `output` of `outputs` to
+`plot(output::AbstractOutputWriter, vars, selectargs)`,
 adding a `labelprefix` (index in `outputs` Vector) to identify each plot series produced.
 """
 RecipesBase.@recipe function f(
@@ -175,9 +173,9 @@ end
 
 
 """
-    @recipe function f(fr::FieldRecord, selectargs::NamedTuple)
+    plot(fr::FieldRecord, selectargs::NamedTuple)
 
-Plot recipe that calls `get_array(fr; selectargs...)` and passes on to `@recipe function f(fa::FieldArray)`.
+Plot recipe that calls `get_array(fr; selectargs...)` and passes on to `plot(fa::FieldArray)`.
 
 Vector-valued fields in `selectargs` are broadcasted (generating a separate plot series for each combination)
 """
@@ -195,7 +193,7 @@ end
 
 
 """
-    @recipe function f(fa::FieldArray; kwargs...)
+    plot(fa::FieldArray; kwargs...)
 
 Plot recipe that plots `fa`. If `fa` has a single dimension, this is suitable for a line-like plot,
 if two dimensions, a heatmap.
@@ -350,9 +348,9 @@ RecipesBase.@recipe function f(
 end
 
 """
-    @recipe function f(fas::Vector{<:FieldArray}; labelprefix="")
+    plot(fas::Vector{<:FieldArray}; labelprefix="")
 
-Pass through (ie "broadcast") each element of `fas` to `@recipe function f(fa::FieldArray)`,
+Pass through (ie "broadcast") each element of `fas` to `plot(fa::FieldArray)`,
 generating one plot series for each.  Adds Vector index to `labelprefix`.
 """
 RecipesBase.@recipe function f(
@@ -378,16 +376,16 @@ function create_stepped(z1, z2, data)
     z = Float64[]
     d = Float64[]
     
-    if z1[end] < z1[begin]
-        zlower, zupper = z1, z2
+    if (z1[end] > z1[begin]) == (z2[begin] > z1[begin])
+        zfirst, zsecond = z1, z2
     else
-        zlower, zupper = z2, z1
+        zfirst, zsecond = z2, z1
     end
 
-    for (dval, zl, zu) in zip(data, zlower, zupper)
-        push!(z, zu)
-        push!(d, dval)
+    for (dval, zl, zu) in zip(data, zfirst, zsecond)
         push!(z, zl)
+        push!(d, dval)
+        push!(z, zu)
         push!(d, dval)
     end
     return z, d

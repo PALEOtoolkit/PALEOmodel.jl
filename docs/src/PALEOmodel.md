@@ -115,14 +115,19 @@ add_record!
 
 ## Plot output
 
-Plot recipes for `PALEOboxes.FieldArray` TODO
-
 ```@meta
 CurrentModule = PALEOmodel
 ```
 ```@docs
+RecipesBase.apply_recipe(::Dict{Symbol, Any}, fa::FieldArray)
+RecipesBase.apply_recipe(::Dict{Symbol, Any}, output::AbstractOutputWriter, vars::Union{AbstractString, Vector{<:AbstractString}}, selectargs::NamedTuple)
+RecipesBase.apply_recipe(::Dict{Symbol, Any}, outputs::Vector{<:AbstractOutputWriter}, vars::Union{AbstractString, Vector{<:AbstractString}}, selectargs::NamedTuple)
+RecipesBase.apply_recipe(::Dict{Symbol, Any}, fr::FieldRecord, selectargs::NamedTuple)
+RecipesBase.apply_recipe(::Dict{Symbol, Any}, fas::Vector{<:FieldArray})
+
 PlotPager
 Plot.test_heatmap_edges
+
 ```
 ## Analyze reaction network
 ```@meta
