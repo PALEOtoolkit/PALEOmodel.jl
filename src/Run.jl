@@ -62,11 +62,11 @@ function initialize!(
     # Allocate variables
     PB.allocate_variables!(model, modeldata, eltypemap=eltypemap)
 
-    # Create modeldata.solver_view_all for the entire model
-    PB.set_default_solver_view!(model, modeldata)    
-
     # check all variables allocated
     PB.check_ready(model, modeldata, expect_hostdep_varnames=expect_hostdep_varnames)
+
+    # Create modeldata.solver_view_all for the entire model
+    PB.set_default_solver_view!(model, modeldata)    
 
     # Initialize model Reaction data arrays (calls ReactionMethod.preparefn)
     # Set modeldata.dispatchlists_all for the entire model
