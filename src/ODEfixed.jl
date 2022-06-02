@@ -471,7 +471,7 @@ function integrateFixedthreads(
 
     integrator_barrier = PALEOmodel.ThreadBarriers.ThreadBarrierAtomic("integrator barrier")
 
-    Threads.@threads for t in 1:Threads.nthreads()
+    Threads.@threads :static for t in 1:Threads.nthreads()
         tid = Threads.threadid()
         @info "start thread $tid"
 
