@@ -12,10 +12,10 @@ import Infiltrator
 Accumulate plots into subplots.
 
 `layout` is supplied to `Plots.jl` `layout` keyword, may be an Int or a Tuple (ny, nx),
-see https://docs.juliaplots.org/latest/
+see <https://docs.juliaplots.org/latest/>.
 
-Optional `kwargs` provides keyword arguments supplied to `plot`
-(eg (legend_background_color=nothing, ) to set all subplot legends to transparent backgrounds)
+Optional `kwargs::NamedTuple` provides additional keyword arguments passed through to `plot`
+(eg `(legend_background_color=nothing, )` to set all subplot legends to transparent backgrounds)
 
 # Usage
 
@@ -78,7 +78,7 @@ function (pp::PlotPager)(p, ps... )
 end
 
 """
-    DefaultPlotPager
+    DefaultPlotPager()
 
 Dummy version of [`PlotPager`](@ref) that just calls `display` for each plot.
 """
@@ -101,7 +101,7 @@ function (pp::DefaultPlotPager)(p, ps... )
 end
 
 """
-    NoPlotPager
+    NoPlotPager()
 
 Dummy version of [`PlotPager`](@ref) that doesn't display the plot
 """
@@ -116,12 +116,18 @@ end
 
 """
     plot(output::AbstractOutputWriter, vars::Union{AbstractString, Vector{<:AbstractString}}, selectargs::NamedTuple=NamedTuple())
+    heatmap(output::AbstractOutputWriter, vars::Union{AbstractString, Vector{<:AbstractString}}, selectargs::NamedTuple=NamedTuple())
+    plot(outputs::Vector{<:AbstractOutputWriter}, vars::Union{AbstractString, Vector{<:AbstractString}}, selectargs::NamedTuple=NamedTuple())
+
 
 Plot recipe that calls `PB.get_field(output, var)`, and passes on to `plot(fr::FieldRecord, selectargs)`
+(see [`RecipesBase.apply_recipe(::Dict{Symbol, Any}, fr::FieldRecord, selectargs::NamedTuple)`](@ref))
 
-Additional features:
-- if `vars` is a Vector, create a plot series for each element.
-- if `var` is of form `<domain>.<name>.<structfield>`, then set `structfield` to take a single field from a `struct` Variable
+Vector-valued `outputs` or `vars` are "broadcast" to create a plot series for each element.
+A `labelprefix` (index in `outputs` Vector) is added to identify each plot series produced.
+
+If `var` is of form `<domain>.<name>.<structfield>`, then sets the `structfield` keyword argument
+to take a single field from a `struct` Variable.
 """
 RecipesBase.@recipe function f(
     output::AbstractOutputWriter,
@@ -174,10 +180,14 @@ end
 
 """
     plot(fr::FieldRecord, selectargs::NamedTuple)
+    heatmap(fr::FieldRecord, selectargs::NamedTuple)
 
-Plot recipe that calls `get_array(fr; selectargs...)` and passes on to `plot(fa::FieldArray)`.
+Plot recipe to plot a single [`FieldRecord`](@ref)
 
-Vector-valued fields in `selectargs` are broadcasted (generating a separate plot series for each combination)
+Calls `get_array(fr; selectargs...)` and passes on to `plot(fa::FieldArray)`
+(see [`RecipesBase.apply_recipe(::Dict{Symbol, Any}, fa::FieldArray)`](@ref)).
+
+Vector-valued fields in `selectargs` are "broadcasted" (generating a separate plot series for each combination)
 """
 RecipesBase.@recipe function f(fr::FieldRecord, selectargs::NamedTuple)
 
@@ -194,9 +204,15 @@ end
 
 """
     plot(fa::FieldArray; kwargs...)
+    heatmap(fa::FieldArray; kwargs...)
+    plot(fas::Vector{<:FieldArray}; kwargs...)
 
-Plot recipe that plots `fa`. If `fa` has a single dimension, this is suitable for a line-like plot,
-if two dimensions, a heatmap.
+Plot recipe that plots a single [`FieldArray`] or Vector of [`FieldArray`]. 
+
+If `fa` has a single dimension, this is suitable for a line-like plot, if two dimensions, a heatmap.
+
+If `fas::Vector` is supplied, this is "broadcast" generating one plot series for each element, 
+with the Vector index prepended to `labelprefix` to identify the plot series (unless overridden by `labellist` or `labelattribute`)
 
 # Keywords
 - `swap_xy::Bool=false`: true to swap x and y axes 

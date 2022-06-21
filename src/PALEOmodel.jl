@@ -10,7 +10,6 @@ import SparsityTracing
 PB.value_ad(x::SparsityTracing.ADval) = SparsityTracing.value(x)
 PB.value_ad(x::ForwardDiff.Dual) = ForwardDiff.value(x)
 
-"base type for OutputWriters"
 abstract type AbstractOutputWriter
 end
 

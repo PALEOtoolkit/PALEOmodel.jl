@@ -21,6 +21,64 @@ using Infiltrator # Julia debugger
 ###################################
 
 """
+    AbstractOutputWriter
+
+Interface implemented by containers for PALEO model output.
+
+Implementations should define methods for:
+
+# Writing output
+- [`initialize!`](@ref)
+- [`add_record!`](@ref)
+
+# Modifying output
+- [`PB.add_field!`](@ref)
+
+# Querying output
+- [`PB.get_table`](@ref)
+- [`PB.show_variables`](@ref)
+- [`PB.has_variable`](@ref)
+
+# Accessing output data
+- [`PALEOmodel.get_array`](@ref)
+- [`PB.get_field`](@ref)
+- [`PB.get_mesh`](@ref)
+- [`PB.get_data`](@ref)
+
+"""
+PALEOmodel.AbstractOutputWriter
+
+"""
+    initialize!(output::PALEOmodel.AbstractOutputWriter, model, modeldata, nrecords [;rec_coord=:tmodel])
+
+Initialize from a PALEOboxes::Model, reserving memory for an assumed output dataset of `nrecords`.
+
+The default for `rec_coord` is `:tmodel`, for a sequence of records following the time evolution
+of the model.
+"""
+function initialize!(
+    output::PALEOmodel.AbstractOutputWriter, model::PB.Model, modeldata::PB.ModelData, nrecords;
+    rec_coord::Symbol=:tmodel
+)
+end
+
+"""
+    add_record!(output::PALEOmodel.AbstractOutputWriter, model, modeldata, rec_coord)
+
+Add an output record for current state of `model` at record coordinate `rec_coord`.
+The usual case (set by [`initialize!`](@ref)) is that the record coordinate is model time `tmodel`.
+"""
+function add_record!(output::PALEOmodel.AbstractOutputWriter, model, modeldata, rec_coord) end
+
+"""
+    add_field!(output::PALEOmodel.AbstractOutputWriter, fr::PALEOmodel.FieldRecord) 
+
+Add [`PALEOmodel.FieldRecord`](@ref) `fr` to `output`, with Domain and name defined by `fr.attributes[:var_domain]` and
+`fr.attributes[:var_name]`.
+"""
+function PB.add_field!(output::PALEOmodel.AbstractOutputWriter, fr::PALEOmodel.FieldRecord) end
+
+"""
     get_table(output::PALEOmodel.AbstractOutputWriter, domainname::AbstractString) -> Table
     get_table(output::PALEOmodel.AbstractOutputWriter, varnames::Vector{<:AbstractString}) -> Table
 
@@ -35,13 +93,27 @@ True if model `output` contains Variable `varname`.
 """
 function PB.has_variable(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString) end
 
+
+"""
+    show_variables(output::PALEOmodel.AbstractOutputWriter; kwargs...) -> Table
+    show_variables(output::PALEOmodel.AbstractOutputWriter, domainname::AbstractString; kwargs...) -> Table
+
+# Keywords:
+- `attributes=[:units, :vfunction, :space, :field_data, :description]`: Variable attributes to include
+- `filter = attrb->true`: function to filter by Variable attributes.
+  Example: `filter=attrb->attrb[:vfunction]!=PB.VF_Undefined` to show state Variables and derivatives.
+
+# Examples:
+    julia> vscodedisplay(PB.show_variables(run.output))  # show all output Variables in VS code table viewer
+    julia> vscodedisplay(PB.show_variables(run.output, ["atm.pCO2PAL", "fluxOceanBurial.flux_P_total"]))  # show subset of output Variables in VS code table viewer
+"""
 function PB.show_variables(output::PALEOmodel.AbstractOutputWriter) end
 
 """
     get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; kwargs...) -> FieldArray
 
-Return a FieldArray containing data values and any attached coordinates, for the 
-FieldRecord for `varname`, and records and spatial region defined by `kwargs`
+Return a [`PALEOmodel.FieldArray`](@ref) containing data values and any attached coordinates, for the 
+[`PALEOmodel.FieldRecord`](@ref) for `varname`, and records and spatial region defined by `kwargs`
     
 Equivalent to `PALEOmodel.get_array(PB.get_field(output, varname), kwargs...)`
 """
@@ -57,26 +129,24 @@ end
 """
     get_field(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString) -> FieldRecord
 
-Return the `FieldRecord` for `varname`.
+Return the [`PALEOmodel.FieldRecord`](@ref) for `varname`.
 """
 function PB.get_field(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString) end
 
+"""
+    get_data(output::PALEOmodel.AbstractOutputWriter, varname; records=nothing) -> values
+
+Get Variable `varname` raw data array, optionally restricting to `records`
+"""
 function PB.get_data(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; records=nothing) end
 
 """
     get_mesh(output::PALEOmodel.AbstractOutputWriter, domainname::AbstractString) -> grid::Union{AbstractMesh, Nothing}
 
-Return `grid`` for `output` Domain `domainname`.
+Return `grid` for `output` Domain `domainname`.
 """
 function PB.get_mesh(output::PALEOmodel.AbstractOutputWriter, domainname::AbstractString) end
 
-"""
-    add_field!(output::PALEOmodel.AbstractOutputWriter, fr::PALEOmodel.FieldRecord) 
-
-Add `FieldRecord` `fr` to `output`, with Domain and name defined by `fr.attributes[:var_domain]` and
-`fr.attributes[:var_name]`.
-"""
-function PB.add_field!(output::PALEOmodel.AbstractOutputWriter, fr::PALEOmodel.FieldRecord) end
 
 ##########################
 # OutputMemoryDomain
@@ -371,8 +441,13 @@ end
 """
     OutputMemory
 
-In-memory model output, organized by model Domains.
+In-memory container for model output, organized by model Domains.
 
+Implements the [`PALEOmodel.AbstractOutputWriter`](@ref) interface, with additional methods
+[`save_jld2`](@ref) and [`load_jld2!`](@ref) to save and load data.
+
+
+# Implementation
 Field `domains::Dict{String, OutputMemoryDomain}` contains per-Domain model output.
 """
 struct OutputMemory <: PALEOmodel.AbstractOutputWriter
@@ -437,19 +512,6 @@ function PB.get_mesh(output::OutputMemory, domainname::AbstractString)
     return output.domains[domainname].grid
 end
 
-"""
-    show_variables(output::OutputMemory; kwargs...) -> Table
-    show_variables(output::OutputMemory, domainname::AbstractString; kwargs...) -> Table
-
-# Keywords:
-- `attributes=[:units, :vfunction, :space, :field_data, :description]`: Variable attributes to include
-- `filter = attrb->true`: function to filter by Variable attributes.
-  Example: `filter=attrb->attrb[:vfunction]!=PB.VF_Undefined` to show state Variables and derivatives.
-
-# Examples:
-    julia> vscodedisplay(PB.show_variables(run.output))  # show all output Variables in VS code table viewer
-    julia> vscodedisplay(PB.show_variables(run.output, ["atm.pCO2PAL", "fluxOceanBurial.flux_P_total"]))  # show subset of output Variables in VS code table viewer
-"""
 function PB.show_variables(
     output::OutputMemory, domainname::AbstractString; kwargs...
 )
@@ -555,14 +617,7 @@ function Base.append!(output1::OutputMemory, output2::OutputMemory)
     return output1
 end
 
-"""
-    initialize!(output::OutputMemory, model, modeldata, nrecords [;rec_coord=:tmodel])
 
-Initialize from a PALEOboxes::Model, reserving memory for an assumed output dataset of `nrecords`.
-
-The default for `rec_coord` is `:tmodel`, for a sequence of records following the time evolution
-of the model.
-"""
 function initialize!(
     output::OutputMemory, model::PB.Model, modeldata::PB.ModelData, nrecords;
     rec_coord::Symbol=:tmodel
@@ -580,12 +635,7 @@ function initialize!(
     return nothing
 end
 
-"""
-    add_record!(output::OutputMemory, model, modeldata, rec_coord)
 
-Add an output record for current state of `model` at record coordinate `rec_coord`.
-The usual case (set by [`initialize!`](@ref)) is that the record coordinate is model time `tmodel`.
-"""
 function add_record!(output::OutputMemory, model, modeldata, rec_coord)
 
     for dom in model.domains
@@ -625,11 +675,7 @@ function PB.add_field!(output::OutputMemory, fr::PALEOmodel.FieldRecord)
     return PB.add_field!(output.domains[domainname], fr)
 end
 
-"""
-    get_data(output::OutputMemory, varname; records=nothing) -> values
 
-Get Variable `varname` raw data array, optionally restricting to `records`
-"""
 PB.get_data(output::OutputMemory, varname::AbstractString; records=nothing) =
     _get_outputvar(output, nothing, varname, records)
 

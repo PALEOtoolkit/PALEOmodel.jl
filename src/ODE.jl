@@ -146,22 +146,31 @@ end
 
 """
     integrate(run, initial_state, modeldata, tspan [; kwargs...] )
+    integrateForwardDiff(run, initial_state, modeldata, tspan [;kwargs...])
 
 Integrate run.model as an ODE or as a DAE with constant mass matrix, and write to `outputwriter`
 
-# Arguments
+Provides a wrapper around the Julia SciML [DifferentialEquations](https://github.com/SciML/DifferentialEquations.jl) 
+package ODE solvers, with PALEO-specific additional setup. Keyword arguments `alg` and `solvekwargs` are passed through to the
+`DifferentialEquations` `solve` method.
 
+`integrateForwardDiff` sets keyword arguments `jac_ad=:ForwardDiffSparse`, `alg=Sundials.CVODE_BDF(linear_solver=:KLU)`
+to use the Julia [ForwardDiff](https://github.com/JuliaDiff/ForwardDiff.jl) package to provide the Jacobian with
+forward-mode automatic differentiation and automatic sparsity detection.
+
+# Arguments
 - `run::Run`: struct with `model::PB.Model` to integrate and `output` field
 - `initial_state::AbstractVector`: initial state vector
-- `modeldata::Modeldata`: ModelData struct with appropriate element type for forward model
+- `modeldata::Modeldata`: ModelData struct
 - `tspan`:  (tstart, tstop) integration start and stop times
 
 # Keywords
-
-- `alg=Sundials.CVODE_BDF()`:  ODE algorithm to use
-- `outputwriter=run.output`: PALEOmodel.AbstractOutputWriter instance to hold output
+- `alg=Sundials.CVODE_BDF()`:  ODE algorithm to use, passed through to DifferentialEquations.jl `solve` method.
+  The default is appropriate for a stiff system of equations (common in biogeochemical models),
+  see <https://diffeq.sciml.ai/dev/solvers/ode_solve/> for other options.
 - `solvekwargs=NamedTuple()`: NamedTuple of keyword arguments passed through to DifferentialEquations.jl `solve`
    (eg to set `abstol`, `reltol`, `saveat`,  see <https://diffeq.sciml.ai/dev/basics/common_solver_opts/>)
+- `outputwriter=run.output`: PALEOmodel.AbstractOutputWriter instance to hold output
 - `jac_ad=:NoJacobian`: Jacobian to generate and use (:NoJacobian, :ForwardDiffSparse, :ForwardDiff)
 - `jac_ad_t_sparsity=tspan[1]`: model time at which to calculate Jacobian sparsity pattern
 - `steadystate=false`: true to use `DifferentialEquations.jl` `SteadyStateProblem`
@@ -231,10 +240,23 @@ end
 
 
 """
-    integrateDAE(run, initial_state, modeldata, tspan;alg=IDA())
+    integrateDAE(run, initial_state, modeldata, tspan [; kwargs...])
+    integrateDAEForwardDiff(run, initial_state, modeldata, tspan [; kwargs...])
 
-Integrate run.model as a DAE and copy output to `outputwriter`. 
-Arguments as [`integrate`](@ref).
+Integrate `run.model` as a DAE and copy output to `outputwriter`.
+
+Provides a wrapper around the Julia SciML [DifferentialEquations](https://github.com/SciML/DifferentialEquations.jl) 
+package DAE solvers, with PALEO-specific additional setup. Keyword arguments `alg` and `solvekwargs` are passed through to the
+`DifferentialEquations` `solve` method.
+
+`integrateDAEForwardDiff` sets keyword arguments `jac_ad=:ForwardDiffSparse`, `alg=Sundials.CVODE_BDF(linear_solver=:KLU)`
+to use the Julia [ForwardDiff](https://github.com/JuliaDiff/ForwardDiff.jl) package to provide the Jacobian with
+forward-mode automatic differentiation and automatic sparsity detection.
+
+# Keywords 
+As [`integrate`](@ref), with defaults:
+- `alg=Sundials.IDA()` (`integrateDAE`)
+- `alg=Sundials.IDA(linear_solver=:KLU)` (`integrateDAEForwardDiff`)
 """
 function integrateDAE(
     run, initial_state, modeldata, tspan; 

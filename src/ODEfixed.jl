@@ -12,18 +12,22 @@ import PALEOmodel
 ###########################################################################
 
 """
-    integrateEuler(run, initial_state, modeldata, tspan, Δt; [,outputwriter])
+    integrateEuler(run, initial_state, modeldata, tspan, Δt [; kwargs])
 
-Integrate run.model using first-order Euler with fixed timestep.
+Integrate `run.model` from `initial_state` using first-order Euler with fixed timestep.
+
+Calls [`integrateFixed`](@ref)
 
 # Arguments
 - `run::Run`: struct with `model::PB.Model` to integrate and `output` field
 - `initial_state::AbstractVector`: initial state vector
 - `modeldata::Modeldata`: ModelData struct with appropriate element type for forward model
 - `tspan`:  (tstart, toutput1, toutput2, ..., tstop) integration start, output, stop times
-- `Δt`: (yr) fixed timestep 
-- [`outputwriter`: `PALEOmodel.AbstractOutputWriter` instance to write model output to]
-- [`report_interval`: number of timesteps between progress update to console]
+- `Δt`: (yr) fixed timestep
+
+# Keywords
+- `outputwriter::PALEOmodel.AbstractOutputWriter=run.output`: container to write model output to
+- `report_interval=1000`: number of timesteps between progress update to console
 """
 function integrateEuler(
     run, initial_state, modeldata, tspan, Δt;
@@ -79,8 +83,8 @@ NB: the combined time derivative is written to `outputwriter`.
 # Keywords
 - `cellranges_outer`: Vector of `CellRange` with `operatorID` defining `f_outer`.
 - `cellranges_inner`: Vector of `CellRange` with `operatorID` defining `f_inner`.
-- [`outputwriter`: `PALEOmodel.AbstractOutputWriter` instance to write model output to]
-- [`report_interval`: number of outer timesteps between progress update to console]
+- `outputwriter::PALEOmodel.AbstractOutputWriter=run.output`: container to write model output to
+- `report_interval=1000`: number of outer timesteps between progress update to console
 """
 function integrateSplitEuler(
     run, initial_state, modeldata, tspan, Δt_outer, n_inner;
@@ -144,7 +148,11 @@ Integrate run.model using first-order Euler with fixed timestep `Δt`, with tili
 - `modeldata::Modeldata`: ModelData struct with appropriate element type for forward model
 - `cellranges::Vector{Vector{AbstractCellRange}}`: Vector of Vector-of-cellranges, one per thread (so length(cellranges) == Threads.nthreads).
 - `tspan`:  (tstart, toutput1, toutput2, ..., tstop) integration start, output, stop times
-- `Δt`: (yr) fixed outer timestep 
+- `Δt`: (yr) fixed outer timestep
+
+# Keywords
+- `outputwriter::PALEOmodel.AbstractOutputWriter=run.output`: container to write model output to
+- `report_interval=1000`: number of outer timesteps between progress update to console
 """
 function integrateEulerthreads(
     run, initial_state, modeldata, cellranges, tspan, Δt;
@@ -213,8 +221,12 @@ Uses `Threads.nthreads` threads and tiling described by `cellranges_inner` and `
 - `tspan`:  (tstart, toutput1, toutput2, ..., tstop) integration start, output, stop times
 - `Δt_outer`: (yr) fixed outer timestep 
 - `n_inner`: number of inner timesteps per outer timestep (0 for non-split solver)
+
+# Keywords
 - `cellranges_outer::Vector{Vector{AbstractCellRange}}`: Vector of list-of-cellranges, one list per thread (so length(cellranges) == Threads.nthreads), with `operatorID` defining `f_outer`.
 - `cellranges_inner::Vector{Vector{AbstractCellRange}}`: As `cellranges_outer`, with `operatorID` defining `f_inner`.
+- `outputwriter::PALEOmodel.AbstractOutputWriter=run.output`: container to write model output to
+- `report_interval=1000`: number of outer timesteps between progress update to console
 """
 function integrateSplitEulerthreads(
     run, initial_state, modeldata, tspan, Δt_outer, n_inner::Int;
