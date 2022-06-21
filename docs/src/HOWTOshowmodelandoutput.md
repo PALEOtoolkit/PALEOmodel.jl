@@ -70,11 +70,11 @@ To show linkage of a ReactionMethod Variable with localname "pO2PAL", Reaction "
 
 ## Display model output
 
-Model output is stored in a [`PALEOmodel.OutputWriters.OutputMemory`](@ref) object, which is
+Model output is stored in a [`PALEOmodel.AbstractOutputWriter`](@ref) object, which is
 available as `run.output`, ie the `output` field of the default [`PALEOmodel.Run`](@ref) instance created
 by the `COPSE_reloaded_reloaded.jl` script.
 
-[`PALEOmodel.OutputWriters.OutputMemory`](@ref) stores model output by Domain:
+The default [`PALEOmodel.OutputWriters.OutputMemory`](@ref) stores model output in memory, by Domain:
 
     julia> run.output  # shows Domains
 
@@ -111,17 +111,54 @@ Raw data arrays can also be accessed as Julia Vectors using `get_data`:
 
 ## Plot model output
 
-The output can be plotted using the Julia Plots.jl package. Plot recipes are defined for [`PALEOmodel.FieldArray`](@ref), 
-so output data can be plotted directly:
+The output can be plotted using the Julia Plots.jl package, see [Plotting output](@ref). Plot recipes are defined for [`PALEOmodel.FieldArray`](@ref), so output data can be plotted directly using the `plot` command:
 
     julia> using Plots
     julia> plot(run.output, "atm.pCO2atm")  # plot output variable as a single command
     julia> plot(pCO2atm) # a PALEOmodel.FieldArray can be plotted
     julia> plot!(tmodel_raw, pCO2atm_raw, label="some raw data") # overlay data from standard Julia Vectors
 
-## Spatial output
+## Spatial or wavelength-dependent output
 
-TODO - key point is that [`PALEOmodel.FieldArray`](@ref) includes coordinates to plot column and image data.
+To analyze spatial or eg wavelength-dependent output (eg time series from a 1D column or 3D general circulation model, or quantities that are a function of wavelength or frequency), [`PALEOmodel.get_array`](@ref) takes additional arguments to take 1D or 2D slices from the spatial, spectral and timeseries data. The [`PALEOmodel.FieldArray`](@ref) returned includes coordinates to plot column (1D) and heatmap (2D) data.
+
+### Examples for a column-based model
+
+Visualisation of spatial and wavelength-dependent output from the PALEOdev.jl ozone photochemistry example (a single 1D atmospheric column):
+
+#### 1D column data
+    julia> plot(title="O3 mixing ratio", output, "atm.O3_mr", (tmodel=[0.0, 0.1, 1.0, 10.0, 100.0, 1000.0], column=1),
+                swap_xy=true, xaxis=:log, labelattribute=:filter_records) # plots O3 vs height
+
+Here the `labelattribute=:filter_records` keyword argument is used to generate plot labels from the `:filter_records` FieldArray attribute, which contains the `tmodel` values used to select the timeseries records.  The plot recipe expands
+the Vector-valued `tmodel` argument to overlay a sequence of plots.
+
+This is equivalent to first creating and then plotting a sequence of `FieldArray` objects:
+
+    julia> O3_mr = PALEOmodel.get_array(run.output, "atm.O3_mr", tmodel=0.0, column=1)
+    julia> plot(title="O3 mixing ratio", O3_mr, swap_xy=true, xaxis=:log, labelattribute=:filter_records)
+    julia> O3_mr = PALEOmodel.get_array(run.output, "atm.O3_mr", tmodel=0.1, column=1)
+    julia> plot!(O3_mr, swap_xy=true, labelattribute=:filter_records)
+
+#### Wavelength-dependent data
+    julia> plot(title="direct transmittance", output, ["atm.direct_trans"], (tmodel=1e12, column=1, cell=[1, 80]),
+                ylabel="fraction", labelattribute=:filter_region) # plots vs wavelength
+
+Here `tmodel=1e12` selects the last model time output, and `column=1, cell=[1, 80]` selects the top and bottom cells within the first (only) 1D column. The `labelattribute=:filter_region` keyword argument is used to generate plot labels from the `:filter_region` FieldArray attribute, which contains the `column` and `cell` values used to select the spatial region.
+
+### Examples for a 3D GCM-based model
+
+Visualisation of spatial output from the 3D GENIE transport-matrix example (PALEOdev.jl repository)
+
+### Horizontal slices across levels
+    julia> heatmap(run.output, "ocean.O2_conc", (tmodel=1e12, k=1), swap_xy=true)
+
+Here `k=1` selects a horizontal level corresponding to model grid cells with index k=1, which is the ocean surface in the GENIE grid.
+
+### Vertical section at constant longitude
+    julia> heatmap(run.output, "ocean.O2_conc", (tmodel=1e12, i=10), swap_xy=true, mult_y_coord=-1.0)
+
+Here `i=10` selects a section at longitude corresponding to model grid cells with index i=10.
 
 ## Save and load output
 

@@ -20,9 +20,13 @@ using SparseDiffTools
 
 """
     steadystate(run, initial_state, modeldata, tss [; kwargs...] )
+    steadystateForwardDiff(run, initial_state, modeldata, tss [; kwargs...] )
 
 Find steady-state solution (using [NLsolve.jl](https://github.com/JuliaNLSolvers/NLsolve.jl) package) 
 and write to `outputwriter` (two records are written, for `initial_state` and the steady-state solution).
+
+`steadystateForwardDiff` has default keyword argument `jac_ad=:ForwardDiffSparse` to use automatic differentiation
+for sparse Jacobian.
 
 # Arguments
 - `run::Run`: struct with `model::PB.Model` to integrate and `output` field
@@ -31,7 +35,7 @@ and write to `outputwriter` (two records are written, for `initial_state` and th
 - `tss`:  (yr) model tforce time for steady state solution
 
 # Optional Keywords
-- `outputwriter=run.output`: PALEOmodel.AbstractOutputWriter instance to hold output
+- `outputwriter::PALEOmodel.AbstractOutputWriter=run.output`: container to hold output
 - `initial_time=-1.0`:  tmodel to write for first output record
 - `solvekwargs=NamedTuple()`: NamedTuple of keyword arguments passed through to [NLsolve.jl](https://github.com/JuliaNLSolvers/NLsolve.jl)
    (eg to set `method`, `ftol`, `iteration`, `show_trace`, `store_trace`).
@@ -182,11 +186,15 @@ end
 ##############################################################
 
 """
-    steadystate_ptc(run, initial_state, modeldata, tss, deltat_initial, tss_max [; kwargs...]) 
-        
+    steadystate_ptc(run, initial_state, modeldata, tspan, deltat_initial; kwargs...) 
+    steadystate_ptcForwardDiff(run, initial_state, modeldata, tspan, deltat_initial; kwargs...) 
+
 Find steady-state solution and write to `outputwriter`, using naive pseudo-transient-continuation
-with first order implicit Euler pseudo-timesteps from `tss` to `tss_max`
+with first order implicit Euler pseudo-timesteps from `tspan[1]` to `tspan[2]`
 and [NLsolve.jl](https://github.com/JuliaNLSolvers/NLsolve.jl) as the non-linear solver.
+
+`steadystate_ptcForwardDiff` has keyword argument default `jac_ad=:ForwardDiffSparse` to use automatic differentiation for 
+sparse Jacobian.
 
 Each pseudo-timestep solves the nonlinear system
 S(t+Δt) = S(t) + Δt dS/dt(t+Δt)
@@ -198,8 +206,16 @@ until pseudo-time `tss_max` is reached. If an iteration fails, Δt is divided by
 NB: this is a _very_ naive initial implementation, there is currently no reliable error control to adapt pseudo-timesteps 
 to the rate of convergence, so requires some trial-and-error to set an appropiate `deltat_fac` for each problem.
 
+# Arguments
+- `run::Run`: struct with `model::PB.Model` to integrate and `output` field
+- `initial_state::AbstractVector`: initial state vector
+- `modeldata::Modeldata`: ModelData struct with appropriate element type for forward model
+- `tspan`: Vector or Tuple with `(initial_time, final_time)`
+- `deltat_initial`: initial pseudo-timestep
+
 # Keywords
 - `deltat_fac=2.0`: factor to increase pseudo-timestep on success
+- `tss_output=[]`: Vector of model times at which to save output (empty Vector to save all output timesteps)
 - `outputwriter=run.output`: output destination
 - `solvekwargs=NamedTuple()`: arguments to pass through to NLsolve
 - `jac_ad=:NoJacobian`: AD Jacobian to use
@@ -208,14 +224,11 @@ to the rate of convergence, so requires some trial-and-error to set an appropiat
   (eg to restrict to an approximate Jacobian)
 - `enforce_noneg=false`: fail pseudo-timesteps that generate negative values for state variables.
 - `use_norm=false`: true to apply PALEO norm_value to state variables
-- `verbose=false`: true to detailed output
+- `verbose=false`: true for detailed output
 - `BLAS_num_threads=1`: restrict threads used by Julia BLAS (likely irrelevant if using sparse Jacobian?)
-
-See [`steadystate`](@ref) for more details of arguments.
-
 """
 function steadystate_ptc(
-    run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; 
+    run, initial_state, modeldata, tspan, deltat_initial::Float64;
     deltat_fac=2.0,
     tss_output=[],
     outputwriter=run.output,
@@ -231,6 +244,9 @@ function steadystate_ptc(
 
     nevals = 0
   
+    # start, end times
+    tss, tss_max = tspan
+
     # workaround Julia BLAS default (mis)configuration that defaults to multi-threaded
     LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
     @info "steadystate_ptc:  using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads"
@@ -525,20 +541,28 @@ function steadystate_ptc(
     return nothing    
 end
 
-"[`steadystate_ptc`](@ref) with argument defaults to  use ForwardDiff AD Jacobian"
 function steadystate_ptcForwardDiff(
-    run, initial_state, modeldata, tss, deltat_initial, tss_max;
+    run, initial_state, modeldata, tspan, deltat_initial::Float64;
     jac_ad=:ForwardDiffSparse,
     kwargs...
 )
 
     return steadystate_ptc(
-        run, initial_state, modeldata, tss, deltat_initial, tss_max; 
+        run, initial_state, modeldata, tspan, deltat_initial; 
 #        (:jac_ad=>:ForwardDiffSparse, kwargs...)... 
         jac_ad=jac_ad,
         kwargs...
     )
 end
 
+
+steadystate_ptc(
+    run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
+) = steadystate_ptc(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
+  
+steadystate_ptcForwardDiff(
+    run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
+) = steadystate_ptcForwardDiff(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
+  
 
 end # module

@@ -14,7 +14,7 @@ using SparseDiffTools
 
 
 """
-    steadystate_ptc(run, initial_state, modeldata, tss, deltat_initial, tss_max; 
+    steadystate_ptc(run, initial_state, modeldata, tspan, deltat_initial; 
         [,deltat_fac=2.0] [,tss_output] [,outputwriter] [,createkwargs] [,solvekwargs]
         [,jac_cellranges] [, use_directional_ad] [, directional_ad_eltypestomap] [,verbose] [,  BLAS_num_threads] )
 
@@ -44,7 +44,7 @@ the default finite difference approximation).
 that should be mapped to the AD directional derivative datatype hence included in the AD directional derivative.
 """
 function steadystate_ptc(
-    run, initial_state, modeldata, tss, deltat_initial, tss_max; 
+    run, initial_state, modeldata, tspan, deltat_initial::Float64; 
     deltat_fac=2.0,
     tss_output=[],
     outputwriter=run.output,
@@ -57,6 +57,8 @@ function steadystate_ptc(
     verbose=false,
     BLAS_num_threads=1
 )
+    # start, end times
+    tss, tss_max = tspan
 
     # workaround Julia BLAS default (mis)configuration that defaults to multi-threaded
     LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
@@ -312,4 +314,8 @@ function steadystate_ptc(
     return nothing    
 end
 
+steadystate_ptc(
+    run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
+) = steadystate_ptc(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
+  
 end # module

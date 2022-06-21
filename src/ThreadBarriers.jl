@@ -142,4 +142,4 @@ function wait_barrier(barrier::ThreadBarrierCond) #, cond)
     return nothing
 end
 
-end
+end # module

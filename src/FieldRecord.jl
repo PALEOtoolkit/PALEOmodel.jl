@@ -5,7 +5,7 @@ A series of records each containing a `PALEOboxes.Field`.
 
 # Implementation
 Fields with array values are stored in `records` as a Vector of arrays.
-Fields with single values (field_single_element true) are stored as a Vector of eltype(Field.values). 
+Fields with single values (`field_single_element` true) are stored as a Vector of `eltype(Field.values)`. 
 """
 struct FieldRecord{D <: PB.AbstractData, S <: PB.AbstractSpace, V, N, M, R}
     records::Vector{R}
@@ -137,7 +137,7 @@ spatial region defined by `selectargs`.
 
 `recordarg` can be one of:
 - `records=r::Int` to select a single record, or `records = first:last` to select a range.
-- `<record coord>`: (where eg <record coord>=tmodel), `<record_coord>=t::Float64 to select a single record
+- `<record coord>`: (where eg `<record coord>=tmodel`), `<record_coord>=t::Float64` to select a single record
   with the nearest value of `fr.coords_record`, or `<record_coord>=(first::Float64, last::Float64)` (a Tuple) to select a range
   starting at the record with the nearest value of `fr.coords_record` before `first` and ending at the nearest record after
   `last`.
