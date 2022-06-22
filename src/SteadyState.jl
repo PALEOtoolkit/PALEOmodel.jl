@@ -4,13 +4,13 @@ import PALEOboxes as PB
 
 import PALEOmodel
 
-using LinearAlgebra
+import LinearAlgebra
+import SparseArrays
 import Infiltrator
 
 import NLsolve
-using ForwardDiff
-using SparseArrays
-using SparseDiffTools
+import ..ODE
+import ..JacobianAD
 
 
 
@@ -53,8 +53,6 @@ function steadystate(
     BLAS_num_threads=1,
 )
 
-    nevals = 0
-
     LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
     @info "steadystate:  using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads"
 
@@ -67,75 +65,30 @@ function steadystate(
     # workspace array 
     worksp = similar(initial_state)
 
-    # normalisation factors
-    state_norm_factor  = ones(length(worksp))
-    
+    state_norm_factor = ones(length(worksp))
     if use_norm
         @info "steadystate: using PALEO normalisation for state variables and time derivatives"
         state_norm_factor  .= PB.get_statevar_norm(sv)       
     end
 
     # calculate normalized residual F = dS/dt
-    function ssf!(Fnorm, unorm)    
-        worksp .= unorm .* state_norm_factor
-       
-        PB.set_tforce!(modeldata.solver_view_all, tss)
-        PB.set_statevar!(modeldata.solver_view_all, worksp) 
-
-        PB.do_deriv(modeldata.dispatchlists_all)
-
-        PB.get_statevar_sms!(Fnorm, modeldata.solver_view_all)
-        Fnorm ./= state_norm_factor
-       
-        nevals += 1
-        return nothing
-    end
+    modelode = ODE.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
+    ssf! = FNormed(modelode, tss, worksp, state_norm_factor)
 
     if jac_ad==:NoJacobian
         @info "steadystate: no Jacobian"   
-        df = NLsolve.OnceDifferentiable(ssf!, initial_state, similar(initial_state)) 
+        df = NLsolve.OnceDifferentiable(ssf!, similar(initial_state), similar(initial_state)) 
     else       
         @info "steadystate:  using Jacobian $jac_ad"
-        jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(jac_ad, run.model, initial_state, modeldata, tss)    
+        jacode, jac_prototype = JacobianAD.jac_config_ode(jac_ad, run.model, initial_state, modeldata, tss)        
 
-        function ssJ!(Jnorm, unorm)       
-            worksp .= unorm .* state_norm_factor
-           
-            # odejac calculates un-normalized J
-            jac(Jnorm, worksp, nothing, tss)
-            if use_norm
-                # in-place multiplication to get Jnorm
-                for j in 1:size(Jnorm)[2]
-                    for i in 1:size(Jnorm)[1]
-                        Jnorm[i, j] *= state_norm_factor[j] ./ state_norm_factor[i]
-                    end
-                end
-            end
-            return nothing
-        end
-
-        function ssJ!(Jnorm::SparseArrays.SparseMatrixCSC, unorm)
-            worksp .= unorm .* state_norm_factor
-           
-            # odejac calculates un-normalized J
-            jac(Jnorm, worksp, nothing, tss)
-            if use_norm
-                # in-place multiplication to get Jnorm
-                for j in 1:size(Jnorm)[2]
-                    for idx in Jnorm.colptr[j]:(Jnorm.colptr[j+1]-1)
-                        i = Jnorm.rowval[idx]
-                        Jnorm.nzval[idx] *= state_norm_factor[j] ./ state_norm_factor[i]
-                    end
-                end
-            end
-            return nothing
-        end
+        ssJ! = JacNormed(jacode, tss, worksp, state_norm_factor)
 
         if !isnothing(jac_prototype)
             # sparse Jacobian
-            df = NLsolve.OnceDifferentiable(ssf!, ssJ!, initial_state, similar(initial_state), copy(jac_prototype)) 
+            df = NLsolve.OnceDifferentiable(ssf!, ssJ!, similar(initial_state), similar(initial_state), copy(jac_prototype)) 
         else
-            df = NLsolve.OnceDifferentiable(ssf!, ssJ!, initial_state, similar(initial_state)) 
+            df = NLsolve.OnceDifferentiable(ssf!, ssJ!, similar(initial_state), similar(initial_state)) 
         end
 
     end
@@ -143,7 +96,7 @@ function steadystate(
     @info lpad("", 80, "=")
     @info "steadystate: calling nlsolve..."
     @info lpad("", 80, "=")
-    @time sol = NLsolve.nlsolve(df, initial_state; solvekwargs...);
+    @time sol = NLsolve.nlsolve(df, initial_state ./ state_norm_factor; solvekwargs...);
     
     @info lpad("", 80, "=")
     @info " * Algorithm: $(sol.method)"
@@ -157,7 +110,7 @@ function steadystate(
     @info lpad("", 80, "=")
 
     ssf!(worksp, sol.zero)
-    @info "  check Fnorm inf-norm $(norm(worksp, Inf)) 2-norm $(norm(worksp, 2))"
+    @info "  check Fnorm inf-norm $(LinearAlgebra.norm(worksp, Inf)) 2-norm $(LinearAlgebra.norm(worksp, 2))"
     
     tsoln = [initial_time, tss]
     soln = [initial_state, sol.zero .* state_norm_factor]
@@ -178,6 +131,77 @@ function steadystateForwardDiff(
         jac_ad=jac_ad,
         kwargs...
     )
+end
+
+
+"""
+    FNormed
+
+Function object to calculate model derivative and adapt to NLsolve interface
+
+Calculates normalized residual F = dS/dt
+"""
+struct FNormed{M <: ODE.ModelODE, W, N}
+    modelode::M
+    tss::Float64
+    worksp::W
+    state_norm_factor::N
+end
+
+function (mn::FNormed)(Fnorm, unorm)
+    mn.worksp .= unorm .* mn.state_norm_factor
+    
+    # println("FNormed: nevals=", mnl.modelode.nevals)
+    mn.modelode(Fnorm, mn.worksp, nothing, mn.tss)
+
+    Fnorm ./= mn.state_norm_factor
+  
+    return nothing
+end
+
+"""
+    JacNormed
+
+Function object to calculate model Jacobian and adapt to NLsolve interface
+"""
+struct JacNormed{J, W, N}
+    jacode::J
+    tss::Float64
+    worksp::W
+    state_norm_factor::N
+end
+
+function (jn::JacNormed)(Jnorm, unorm)
+    jn.worksp .= unorm .* jn.state_norm_factor
+    
+    # odejac calculates un-normalized J
+    jn.jacode(Jnorm, jn.worksp, nothing, jn.tss)
+
+    # in-place multiplication to get Jnorm
+    for j in 1:size(Jnorm)[2]
+        for i in 1:size(Jnorm)[1]
+            Jnorm[i, j] *= jn.state_norm_factor[j] / jn.state_norm_factor[i]
+        end
+    end
+
+    return nothing
+end
+
+function (jn::JacNormed)(Jnorm::SparseArrays.SparseMatrixCSC, unorm)
+    jn.worksp .= unorm .* jn.state_norm_factor
+   
+    # odejac calculates un-normalized J
+    jn.jacode(Jnorm, jn.worksp, nothing, jn.tss)
+
+    # in-place multiplication to get Jnorm
+    for j in 1:size(Jnorm)[2]
+        for idx in Jnorm.colptr[j]:(Jnorm.colptr[j+1]-1)
+            i = Jnorm.rowval[idx]
+            Jnorm.nzval[idx] *= jn.state_norm_factor[j] / jn.state_norm_factor[i]
+        end
+    end
+
+    return nothing
 end
 
 
@@ -242,19 +266,79 @@ function steadystate_ptc(
     BLAS_num_threads=1
 )
 
-    nevals = 0
-  
-    # start, end times
-    tss, tss_max = tspan
+    nlsolveF = nlsolveF_PTC(
+        run.model, initial_state, modeldata;
+        jac_ad=jac_ad,
+        tss_jac_sparsity=tspan[1],
+        request_adchunksize=request_adchunksize,
+        jac_cellranges=jac_cellranges,
+        use_norm=use_norm
+    )
 
-    # workaround Julia BLAS default (mis)configuration that defaults to multi-threaded
-    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
-    @info "steadystate_ptc:  using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads"
- 
+    solve_ptc(
+        run, initial_state, nlsolveF, tspan, deltat_initial::Float64;
+        deltat_fac=deltat_fac,
+        tss_output=tss_output,
+        outputwriter=outputwriter,
+        solvekwargs=solvekwargs,
+        enforce_noneg=enforce_noneg,
+        verbose=verbose,
+        BLAS_num_threads=BLAS_num_threads,
+    )
+
+    return nothing    
+end
+
+function steadystate_ptcForwardDiff(
+    run, initial_state, modeldata, tspan, deltat_initial::Float64;
+    jac_ad=:ForwardDiffSparse,
+    kwargs...
+)
+
+    return steadystate_ptc(
+        run, initial_state, modeldata, tspan, deltat_initial; 
+        jac_ad=jac_ad,
+        kwargs...
+    )
+end
+
+# Deprecated form
+steadystate_ptc(
+    run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
+) = steadystate_ptc(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
+  
+# Deprecated form
+steadystate_ptcForwardDiff(
+    run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
+) = steadystate_ptcForwardDiff(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
+  
+
+"""
+    nlsolveF_PTC(
+        model, initial_state, modeldata;
+        jac_ad=:NoJacobian,
+        request_adchunksize=10,
+        jac_cellranges=modeldata.cellranges_all,
+        use_norm=false
+    ) -> (ssFJ!, df::NLsolve.OnceDifferentiable)
+
+Create function object to pass to NLsolve, with function + optional Jacobian
+"""
+function nlsolveF_PTC(
+    model, initial_state, modeldata;
+    jac_ad=:NoJacobian,
+    tss_jac_sparsity=nothing,
+    request_adchunksize=10,
+    jac_cellranges=modeldata.cellranges_all,
+    use_norm=false
+)
     sv = modeldata.solver_view_all
     # We only support explicit ODE-like configurations (no DAE constraints or implicit variables)
     iszero(PB.num_total(sv))                 || error("implicit total variables not supported")
     iszero(PB.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+
+    # previous_state is state at previous timestep
+    previous_state = similar(initial_state)
 
     # workspace arrays 
     worksp          = similar(initial_state)
@@ -267,215 +351,135 @@ function steadystate_ptc(
         state_norm_factor  .= PB.get_statevar_norm(sv)       
     end
 
-    # current pseudo-timestep
-    deltat = deltat_initial
+    # current time and deltat (Refs are passed into function objects, and then updated each timestep)
+    tss = Ref(NaN)
+    deltat = Ref(NaN)
 
-    # calculate normalized residual F = S - Sinit - deltat*dS/dt
-    # (this is a 'closure', where deltat, state_norm_factor, etc refer to 
-    #  captured variables defined outside the ssf! function)
-    function ssf!(Fnorm, unorm)       
-             
-        worksp .= unorm .* state_norm_factor
+    modelode = ODE.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
 
-        PB.set_tforce!(modeldata.solver_view_all, tss)
-        PB.set_statevar!(modeldata.solver_view_all, worksp) 
-
-        PB.do_deriv(modeldata.dispatchlists_all)
-
-        PB.get_statevar_sms!(deriv_worksp, modeldata.solver_view_all)
-        Fnorm .=  (worksp .- initial_state - deltat.*deriv_worksp) ./ state_norm_factor
-
-        nevals += 1
-        return nothing
-    end
-
-    # Define 'df' object to pass to NLsolve, with function + optional Jacobian
     if jac_ad==:NoJacobian
         @info "steadystate: no Jacobian"
         # Define the function we want to solve 
-        df = NLsolve.OnceDifferentiable(ssf!, initial_state, similar(initial_state)) 
+        ssFJ! = FJacNormedPTC(modelode, nothing, tss, deltat, nothing, nothing, previous_state, worksp, deriv_worksp, state_norm_factor)
+        df = NLsolve.OnceDifferentiable(ssFJ!, similar(initial_state), similar(initial_state)) 
     else       
         @info "steadystate:  using Jacobian $jac_ad"
-        jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
-            jac_ad, run.model, initial_state, modeldata, tss,
+        jacode, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
+            jac_ad, model, initial_state, modeldata, tss_jac_sparsity,
             request_adchunksize=request_adchunksize,
             jac_cellranges=jac_cellranges
         )    
 
-        (transfer_data_ad, transfer_data) = PALEOmodel.JacobianAD.jac_transfer_variables(
-            run.model,
-            jac.modeldata,
+        transfer_data_ad, transfer_data = PALEOmodel.JacobianAD.jac_transfer_variables(
+            model,
+            jacode.modeldata,
             modeldata
         )
-        # Calculate dense Jacobian = dF/dS = I - deltat * odeJac
-        function ssJ!(Jnorm, unorm)       
-            worksp .= unorm .* state_norm_factor
-        
-            if !isempty(transfer_data_ad)
-                PB.set_tforce!(modeldata.solver_view_all, tss)
-                PB.set_statevar!(modeldata.solver_view_all, worksp)                 
-                PB.do_deriv(modeldata.dispatchlists_all)
-                # transfer Variables not recalculated by Jacobian
-                for (d_ad, d) in zip(transfer_data_ad, transfer_data)                
-                    d_ad .= d
-                end
-            end
-
-            # odejac calculates un-normalized J
-            jac(Jnorm, worksp, nothing, tss)
-            # convert J  = I - deltat * odeJac  
-            for j in 1:size(Jnorm)[2]
-                for i in 1:size(Jnorm)[1]
-                    Jnorm[i, j] = -deltat*Jnorm[i,j]
-                    if i == j
-                        Jnorm[i, j] += 1.0
-                    end
-
-                    # normalize 
-                    Jnorm[i, j] *= state_norm_factor[j] ./ state_norm_factor[i]
-                end
-            end
-           
-            return nothing
-        end
-
-        # Calculate sparse Jacobian = dF/dS = I - deltat * odeJac
-        function ssJ!(Jnorm::SparseArrays.SparseMatrixCSC, unorm)
-          
-            worksp .= unorm .* state_norm_factor
-        
-            if !isempty(transfer_data_ad)
-                PB.set_tforce!(modeldata.solver_view_all, tss)
-                PB.set_statevar!(modeldata.solver_view_all, worksp)                 
-                PB.do_deriv(modeldata.dispatchlists_all)
-                # transfer Variables not recalculated by Jacobian
-                for (d_ad, d) in zip(transfer_data_ad, transfer_data)                
-                    d_ad .= d
-                end
-            end
-
-            # odejac calculates un-normalized J
-            jac(Jnorm, worksp, nothing, tss)
-            # convert J  = I - deltat * odeJac  
-            for j in 1:size(Jnorm)[2]
-                # idx is index in SparseMatrixCSC compressed storage, i is row index
-                for idx in Jnorm.colptr[j]:(Jnorm.colptr[j+1]-1)
-                    i = Jnorm.rowval[idx]
-
-                    Jnorm.nzval[idx] = -deltat*Jnorm.nzval[idx]
-                    if i == j
-                        Jnorm.nzval[idx] += 1.0
-                    end
-
-                    # normalize
-                    Jnorm.nzval[idx] *= state_norm_factor[j] ./ state_norm_factor[i]
-                end
-            end
-    
-            return nothing
-        end
-
-        function ssFJ!(Fnorm, Jnorm::SparseArrays.SparseMatrixCSC, unorm)
-            # println("ssFJ! tss=", tss)
-            worksp .= unorm .* state_norm_factor
-        
-            PB.set_tforce!(modeldata.solver_view_all, tss)
-            PB.set_statevar!(modeldata.solver_view_all, worksp) 
-
-            PB.do_deriv(modeldata.dispatchlists_all)
-
-            PB.get_statevar_sms!(deriv_worksp, modeldata.solver_view_all)
-            Fnorm .=  (worksp .- initial_state - deltat.*deriv_worksp) ./ state_norm_factor
-
-            nevals += 1
-
-            # transfer Variables not recalculated by Jacobian
-            for (d_ad, d) in zip(transfer_data_ad, transfer_data)                
-                d_ad .= d
-            end
-
-            # odejac calculates un-normalized J          
-            jac(Jnorm, worksp, nothing, tss)
-            # convert J  = I - deltat * odeJac  
-            for j in 1:size(Jnorm)[2]
-                # idx is index in SparseMatrixCSC compressed storage, i is row index
-                for idx in Jnorm.colptr[j]:(Jnorm.colptr[j+1]-1)
-                    i = Jnorm.rowval[idx]
-
-                    Jnorm.nzval[idx] = -deltat*Jnorm.nzval[idx]
-                    if i == j
-                        Jnorm.nzval[idx] += 1.0
-                    end
-
-                    # normalize
-                    Jnorm.nzval[idx] *= state_norm_factor[j] ./ state_norm_factor[i]
-                end
-            end
-    
-            return nothing
-        end
-
+       
+        ssFJ! = FJacNormedPTC(modelode, jacode, tss, deltat, transfer_data_ad, transfer_data, previous_state, worksp, deriv_worksp, state_norm_factor)
+ 
         # Define the function + Jacobian we want to solve
-        if !isnothing(jac_prototype)
-            # function + sparse Jacobian with sparsity pattern defined by jac_prototype
-            df = NLsolve.OnceDifferentiable(ssf!, ssJ!, ssFJ!, initial_state, similar(initial_state), copy(jac_prototype)) 
-        else
-            # function + dense Jacobian
-            df = NLsolve.OnceDifferentiable(ssf!, ssJ!, ssFJ!, initial_state, similar(initial_state)) 
-        end
-
+        !isnothing(jac_prototype) || error("Jacobian is not sparse")
+        # function + sparse Jacobian with sparsity pattern defined by jac_prototype
+        df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state), similar(initial_state), copy(jac_prototype))         
     end
 
+    return (ssFJ!, df)
+end
+
+"""
+    solve_ptc(run, initial_state, nlsolveF, tspan, deltat_initial::Float64; kwargs...)
+
+Pseudo-transient continuation using NLsolve with `nlsolveF` function objects created by `nlsolveF_PTC`
+"""
+function solve_ptc(
+    run, initial_state, nlsolveF, tspan, deltat_initial::Float64;
+    deltat_fac=2.0,
+    tss_output=[],
+    outputwriter=run.output,
+    solvekwargs::NamedTuple=NamedTuple{}(),
+    enforce_noneg=false,
+    verbose=false,
+    BLAS_num_threads=1
+)
+
+    tss_initial, tss_max = tspan
+
+    # workaround Julia BLAS default (mis)configuration that defaults to multi-threaded
+    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
+    @info "steadystate_ptc:  using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads"
+ 
+    
+    ############################################################
     # Vectors to accumulate solution at each pseudo-timestep
+    #########################################################
+    
     # first entry is initial state
-    tsoln = [tss]                       # vector of pseudo-times
+    tsoln = [tss_initial]                       # vector of pseudo-times
     soln = [copy(initial_state)]        # vector of state vectors at each pseudo-time
 
     # Vectors to accumulate solution at requested tss_output    
     iout = 1                            # tss_output[iout] is model time of next record to output
-    tsoln = [tss]                       # output vector of pseudo-times
+    tsoln = [tss_initial]                       # output vector of pseudo-times
     soln = [copy(initial_state)]        # output vector of state vectors at each pseudo-time
     # Always write initial state as first entry (whether requested or not)
-    if !isempty(tss_output) && (tss_output[1] == tss)
+    if !isempty(tss_output) && (tss_output[1] == tss_initial)
         # don't repeat initial state if that was requested
         iout += 1
     end
- 
 
+    ########################################################
+    # state held in nlsolveF
+    ########################################################
+    ssFJ!, df = nlsolveF
+    tss = ssFJ!.t
+    deltat = ssFJ!.delta_t
+    previous_state = ssFJ!.previous_state
+    state_norm_factor = ssFJ!.state_norm_factor
+    modeldata = ssFJ!.modelode.modeldata
+ 
+    #################################################
     # outer loop over pseudo-timesteps
-    initial_state = copy(initial_state)
+    #################################################
     
+    # current pseudo-timestep
+    tss[] = tss_initial
+    deltat[] = deltat_initial
+    previous_state .= initial_state
+        
     ptc_iter = 1
     sol = nothing
-    @time while tss < tss_max
-        deltat_full = deltat  # keep track of the deltat we could have used
-        deltat = min(deltat, tss_max - tss) # limit last timestep to get to tss_max
+    @time while tss[] < tss_max
+        deltat_full = deltat[]  # keep track of the deltat we could have used
+        deltat[] = min(deltat[], tss_max - tss[]) # limit last timestep to get to tss_max
         if iout < length(tss_output)
-            deltat = min(deltat, tss_output[iout] - tss) # limit timestep to get to next requested output
+            deltat[] = min(deltat[], tss_output[iout] - tss[]) # limit timestep to get to next requested output
         end
 
-        tss += deltat
+        tss[] += deltat[]
 
         verbose && @info lpad("", 80, "=")
-        @info "steadystate: ptc_iter $ptc_iter tss $tss deltat=$deltat deltat_full=$deltat_full calling nlsolve..."
+        @info "steadystate: ptc_iter $ptc_iter tss $(tss[]) deltat=$(deltat[]) deltat_full=$deltat_full calling nlsolve..."
         verbose && @info lpad("", 80, "=")
         
         sol_ok = true
         try
             # solve nonlinear system for this pseudo-timestep
-            sol = NLsolve.nlsolve(df, initial_state; solvekwargs...);
+            sol = NLsolve.nlsolve(df, previous_state ./ state_norm_factor; solvekwargs...);
             
             if verbose
-                @info lpad("", 80, "=")
-                @info " * Algorithm: $(sol.method)"
-                @info " * Inf-norm of residuals: $(sol.residual_norm)"
-                @info " * Iterations: $(sol.iterations)"
-                @info " * Convergence: $(NLsolve.converged(sol))"
-                @info "   * |x - x'| < $(sol.xtol): $(sol.x_converged)"
-                @info "   * |f(x)| < $(sol.ftol): $(sol.f_converged)"
-                @info " * Function Calls (f): $(sol.f_calls)"
-                @info " * Jacobian Calls (df/dx): $(sol.g_calls)"
-                @info lpad("", 80, "=")
+                io = IOBuffer()
+                println(io, lpad("", 80, "="))
+                println(io, " * Algorithm: $(sol.method)")
+                println(io, " * Inf-norm of residuals: $(sol.residual_norm)")
+                println(io, " * Iterations: $(sol.iterations)")
+                println(io, " * Convergence: $(NLsolve.converged(sol))")
+                println(io, "   * |x - x'| < $(sol.xtol): $(sol.x_converged)")
+                println(io, "   * |f(x)| < $(sol.ftol): $(sol.f_converged)")
+                println(io, " * Function Calls (f): $(sol.f_calls)")
+                println(io, " * Jacobian Calls (df/dx): $(sol.g_calls)")
+                println(io, lpad("", 80, "="))
+                @info String(take!(io))
 
                 ssf!(worksp, sol.zero)
                 @info "  check Fnorm inf-norm $(norm(worksp, Inf)) 2-norm $(norm(worksp, 2))"
@@ -503,37 +507,37 @@ function steadystate_ptc(
 
         # very crude pseudo-timestep adaptation (increase on success, reduce on failure)
         if sol_ok          
-            if deltat == deltat_full
+            if deltat[] == deltat_full
                 # we used the full deltat and it worked - increase deltat
-                deltat *= deltat_fac
+                deltat[] *= deltat_fac
             else
                 # we weren't using the full timestep as an output was requested, so go back to full
-                deltat = deltat_full
+                deltat[] = deltat_full
             end
-            initial_state .= sol.zero .* state_norm_factor
+            previous_state .= sol.zero .* state_norm_factor
             # write output record, if required
             if isempty(tss_output) ||                       # all records requested, or ...
                 (iout <= length(tss_output) &&                  # (not yet done last requested record
-                    tss >= tss_output[iout])                    # and just gone past a requested record)              
-                @info "    writing output record at tmodel = $(tss)"
-                push!(tsoln, tss)
+                    tss[] >= tss_output[iout])                    # and just gone past a requested record)              
+                @info "    writing output record at tmodel = $(tss[])"
+                push!(tsoln, tss[])
                 push!(soln, sol.zero .* state_norm_factor)
                 iout += 1
             end
 
         else
             @warn "iter failed, reducing deltat"
-            tss -= deltat
-            deltat /= deltat_fac^2
+            tss[] -=  deltat[]
+            deltat[] /= deltat_fac^2
         end
         
         ptc_iter += 1
     end
 
     # always write the last record even if it wasn't explicitly requested
-    if tsoln[end] != tss
-        @info "    writing output record at tmodel = $(tss)"
-        push!(tsoln, tss)
+    if tsoln[end] != tss[]
+        @info "    writing output record at tmodel = $(tss[])"
+        push!(tsoln, tss[])
         push!(soln, sol.zero .* state_norm_factor)
     end
 
@@ -541,28 +545,69 @@ function steadystate_ptc(
     return nothing    
 end
 
-function steadystate_ptcForwardDiff(
-    run, initial_state, modeldata, tspan, deltat_initial::Float64;
-    jac_ad=:ForwardDiffSparse,
-    kwargs...
-)
+"""
+    FJacNormedPTC
 
-    return steadystate_ptc(
-        run, initial_state, modeldata, tspan, deltat_initial; 
-#        (:jac_ad=>:ForwardDiffSparse, kwargs...)... 
-        jac_ad=jac_ad,
-        kwargs...
-    )
+Function object to calculate model derivative and Jacobian and adapt to NLsolve interface
+
+Calculates sparse Jacobian = dF/dS = I - deltat * odeJac
+"""
+struct FJacNormedPTC{M, J, T1, T2, W, N}
+    modelode::M
+    jacode::J
+    t::Ref{Float64}
+    delta_t::Ref{Float64}
+    transfer_data_ad::T1
+    transfer_data::T2
+    previous_state::W
+    worksp::W
+    deriv_worksp::W
+    state_norm_factor::N
 end
 
+# F only
+(jn::FJacNormedPTC)(Fnorm, unorm) = jn(Fnorm, nothing, unorm)
 
-steadystate_ptc(
-    run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
-) = steadystate_ptc(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
-  
-steadystate_ptcForwardDiff(
-    run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
-) = steadystate_ptcForwardDiff(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
-  
+# Jacobian only
+(jn::FJacNormedPTC)(Jnorm::SparseArrays.SparseMatrixCSC, unorm) = jn(nothing, Jnorm, unorm)
+
+# F and J
+function (jn::FJacNormedPTC)(Fnorm, Jnorm::Union{SparseArrays.SparseMatrixCSC, Nothing}, unorm)
+
+    jn.worksp .= unorm .* jn.state_norm_factor
+    
+    jn.modelode(jn.deriv_worksp, jn.worksp, nothing, jn.t[])
+
+    if !isnothing(Fnorm)
+        Fnorm .=  (jn.worksp .- jn.previous_state - jn.delta_t[].*jn.deriv_worksp) ./ jn.state_norm_factor
+    end
+
+    if !isnothing(Jnorm)
+        # transfer Variables not recalculated by Jacobian
+        for (d_ad, d) in zip(jn.transfer_data_ad, jn.transfer_data)                
+            d_ad .= d
+        end
+
+        # odejac calculates un-normalized J          
+        jn.jacode(Jnorm, jn.worksp, nothing, jn.t[])
+        # convert J  = I - deltat * odeJac  
+        for j in 1:size(Jnorm)[2]
+            # idx is index in SparseMatrixCSC compressed storage, i is row index
+            for idx in Jnorm.colptr[j]:(Jnorm.colptr[j+1]-1)
+                i = Jnorm.rowval[idx]
+
+                Jnorm.nzval[idx] = -jn.delta_t[]*Jnorm.nzval[idx]
+                # normalize
+                Jnorm.nzval[idx] *= jn.state_norm_factor[j] ./ jn.state_norm_factor[i]
+
+                if i == j
+                    Jnorm.nzval[idx] += 1.0
+                end                
+            end
+        end
+    end
+
+    return nothing
+end
 
 end # module
