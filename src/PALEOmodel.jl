@@ -33,6 +33,8 @@ include("SteadyState.jl")
 
 include("SteadyStateKinsol.jl")
 
+include("SteadyStateNonlinearSolve.jl")
+
 include("FieldArray.jl")
 
 include("FieldRecord.jl")
