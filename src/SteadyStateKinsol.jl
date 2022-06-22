@@ -310,7 +310,7 @@ function steadystate_ptc(
         push!(soln, copy(userdata.current_state))
     end
 
-    PALEOmodel.ODE.calc_output_sol(outputwriter, run.model, tsoln, soln, modeldata)
+    PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modeldata)
     return nothing    
 end
 

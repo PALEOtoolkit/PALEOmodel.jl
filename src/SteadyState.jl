@@ -162,7 +162,7 @@ function steadystate(
     tsoln = [initial_time, tss]
     soln = [initial_state, sol.zero .* state_norm_factor]
 
-    PALEOmodel.ODE.calc_output_sol(outputwriter, run.model, tsoln, soln, modeldata)
+    PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modeldata)
     return sol    
 end
 
@@ -537,7 +537,7 @@ function steadystate_ptc(
         push!(soln, sol.zero .* state_norm_factor)
     end
 
-    PALEOmodel.ODE.calc_output_sol(outputwriter, run.model, tsoln, soln, modeldata)
+    PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modeldata)
     return nothing    
 end
 
