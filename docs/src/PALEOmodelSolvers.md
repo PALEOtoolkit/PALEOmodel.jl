@@ -17,6 +17,7 @@ Wrappers for the Julia [DifferentialEquations](https://github.com/SciML/Differen
 
 NB: see [Managing small and negative values](@ref) for best practices and common issues when using ODE or DAE solvers.
 
+### High level wrappers
 ```@meta
 CurrentModule = PALEOmodel.ODE
 ```
@@ -24,6 +25,21 @@ CurrentModule = PALEOmodel.ODE
 integrate
 integrateDAE
 ```
+
+### Low level functions
+```@meta
+CurrentModule = PALEOmodel.ODE
+```
+```@docs
+ODEfunction
+
+DAEfunction
+get_inconsistent_initial_deriv
+
+print_sol_stats
+calc_output_sol!
+```
+
 ## Fixed timestep solvers
 ```@meta
 CurrentModule = PALEOmodel.ODEfixed

@@ -27,10 +27,17 @@ import SciMLBase
 ##############################################################
 
 """
-    ODEfunction
+    ODEfunction(model::PB.Model, modeldata [; kwargs]) -> SciMLBase.ODEFunction
 
-Contruct SciML ODEfunction https://diffeq.sciml.ai/latest/
-with PALEO-specific setup
+Contruct SciML ODEfunction <https://diffeq.sciml.ai/latest/> with PALEO-specific setup
+
+Keyword arguments are required to generate a Jacobian function (using automatic differentation).
+
+# Keywords
+- `jac_ad=:NoJacobian`: Jacobian to generate and use (:NoJacobian, :ForwardDiffSparse, :ForwardDiff)
+- `initial_state::AbstractVector`: initial state vector
+- `jac_ad_t_sparsity::Float64`: model time at which to calculate Jacobian sparsity pattern
+- `init_logger=Logging.NullLogger()`: default value omits logging from (re)initialization to generate Jacobian modeldata, Logging.CurrentLogger() to include
 """
 function ODEfunction(
     model::PB.Model, modeldata;   
@@ -62,17 +69,24 @@ function ODEfunction(
         init_logger=init_logger,
     )    
     
-    f = SciMLBase.ODEFunction(m, jac=jac, jac_prototype=jac_prototype, mass_matrix=M)
+    f = SciMLBase.ODEFunction{true}(m, jac=jac, jac_prototype=jac_prototype, mass_matrix=M)
        
     return f
 end
 
 
 """
-    DAEfunction
+    DAEfunction(model::PB.Model, modeldata [; kwargs]) -> SciMLBase.DAEFunction
 
-Contruct a SciML.DAEfunction https://diffeq.sciml.ai/latest/
-with PALEO-specific setup
+Contruct SciML DAEfunction <https://diffeq.sciml.ai/latest/> with PALEO-specific setup
+
+Keyword arguments are required to generate a Jacobian function (using automatic differentation).
+
+# Keywords
+- `jac_ad=:NoJacobian`: Jacobian to generate and use (:NoJacobian, :ForwardDiffSparse, :ForwardDiff)
+- `initial_state::AbstractVector`: initial state vector
+- `jac_ad_t_sparsity::Float64`: model time at which to calculate Jacobian sparsity pattern
+- `init_logger=Logging.NullLogger()`: default value omits logging from (re)initialization to generate Jacobian modeldata, Logging.CurrentLogger() to include
 """
 function DAEfunction(
     model::PB.Model, modeldata;   
@@ -84,69 +98,21 @@ function DAEfunction(
 
     @info "DAEfunction:  using Jacobian $jac_ad"
     
-    (jac, jac_prototype, odeimplicit) = PALEOmodel.JacobianAD.jac_config_dae(
+    jac, jac_prototype, odeimplicit = PALEOmodel.JacobianAD.jac_config_dae(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity,
         init_logger=init_logger,
     )
-    modeldae =  ModelDAE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, odeimplicit, 0)
+    m =  ModelDAE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, odeimplicit, 0)
     
-    f = SciMLBase.DAEFunction(modeldae, jac=jac, jac_prototype=jac_prototype)  
+    f = SciMLBase.DAEFunction{true}(m, jac=jac, jac_prototype=jac_prototype)  
 
     return f
 end
 
-"""
-    DAEproblem
-
-Contruct SciML DAEproblem https://diffeq.sciml.ai/latest/
-with PALEO-specific setup
-"""
-function DAEproblem(
-    func::SciMLBase.DAEFunction, modeldata, initial_state, tspan;
-)
-    differential_vars = PB.state_vars_isdifferential(modeldata.solver_view_all)
-
-    # create inconsistent initial conditions, rely on DAE solver to find them
-    modeldae = func.f 
-    initial_deriv = get_inconsistent_initial_deriv(
-        initial_state, modeldata, tspan[1], differential_vars, modeldae
-    )
-
-    prob = SciMLBase.DAEProblem(
-        func, initial_deriv, initial_state, tspan, nothing,
-        differential_vars=differential_vars,
-    )
-
-    return prob
-end
 
 """
-    solve
-
-Call SciML.solve https://diffeq.sciml.ai/latest/
-with PALEO-specific setup.
-"""
-function solve(
-    prob, alg;     
-    solvekwargs::NamedTuple=NamedTuple{}(),
-    BLAS_num_threads=1,
-)
-    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
-
-    @info lpad("", 80, "=")
-    @info "solve:  using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads"
-    @info lpad("", 80, "=")
-   
-    @time sol = SciMLBase.solve(prob, alg; solvekwargs...);
-
-    print_sol_stats(sol)
-  
-    return sol    
-end
-
-"""
-    integrate(run, initial_state, modeldata, tspan [; kwargs...] )
-    integrateForwardDiff(run, initial_state, modeldata, tspan [;kwargs...])
+    integrate(run, initial_state, modeldata, tspan [; kwargs...] ) -> sol::SciMLBase.ODESolution
+    integrateForwardDiff(run, initial_state, modeldata, tspan [;kwargs...]) -> sol::SciMLBase.ODESolution
 
 Integrate run.model as an ODE or as a DAE with constant mass matrix, and write to `outputwriter`
 
@@ -157,6 +123,15 @@ package ODE solvers, with PALEO-specific additional setup. Keyword arguments `al
 `integrateForwardDiff` sets keyword arguments `jac_ad=:ForwardDiffSparse`, `alg=Sundials.CVODE_BDF(linear_solver=:KLU)`
 to use the Julia [ForwardDiff](https://github.com/JuliaDiff/ForwardDiff.jl) package to provide the Jacobian with
 forward-mode automatic differentiation and automatic sparsity detection.
+
+# Implementation
+Follows the SciML standard pattern:
+- Create [`ODEfunction`](@ref)
+- Create `SciMLBase.ODEproblem`
+- Call `SciMLBase.solve`
+and then 
+- Call [`print_sol_stats`](@ref)
+- Call [`calc_output_sol!`](@ref) to recalculate model fields at timesteps used
 
 # Arguments
 - `run::Run`: struct with `model::PB.Model` to integrate and `output` field
@@ -198,22 +173,27 @@ function integrate(
         init_logger=init_logger,
     )
  
+    io = IOBuffer()
+    println(io, lpad("", 80, "="))
     if steadystate
-        @info "integrate:  SteadyStateProblem using algorithm: $alg Jacobian $jac_ad"
+        println(io, "integrate:  SteadyStateProblem using algorithm: $alg Jacobian $jac_ad")
         prob = SciMLBase.SteadyStateProblem(f, initial_state, nothing)
     else
-        @info "integrate:  ODEProblem using algorithm: $alg Jacobian $jac_ad"
+        println(io, "integrate:  ODEProblem using algorithm: $alg Jacobian $jac_ad")
         prob = SciMLBase.ODEProblem(f, initial_state, tspan, nothing)
     end
 
-    sol = solve(
-        prob, alg;     
-        solvekwargs=solvekwargs,
-        BLAS_num_threads=BLAS_num_threads,
-    )
+    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
+    println(io, "    using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads")
+    println(io, lpad("", 80, "="))
+    @info String(take!(io))
+   
+    @time sol = SciMLBase.solve(prob, alg; solvekwargs...);
+
+    print_sol_stats(sol)
 
     if !isnothing(outputwriter)
-        calc_output_sol(outputwriter, run.model, sol, tspan, initial_state, modeldata)
+        calc_output_sol!(outputwriter, run.model, sol, tspan, initial_state, modeldata)
     end
 
     return sol
@@ -240,8 +220,8 @@ end
 
 
 """
-    integrateDAE(run, initial_state, modeldata, tspan [; kwargs...])
-    integrateDAEForwardDiff(run, initial_state, modeldata, tspan [; kwargs...])
+    integrateDAE(run, initial_state, modeldata, tspan [; kwargs...]) -> sol::SciMLBase.DAESolution
+    integrateDAEForwardDiff(run, initial_state, modeldata, tspan [; kwargs...]) -> sol::SciMLBase.DAESolution
 
 Integrate `run.model` as a DAE and copy output to `outputwriter`.
 
@@ -252,6 +232,16 @@ package DAE solvers, with PALEO-specific additional setup. Keyword arguments `al
 `integrateDAEForwardDiff` sets keyword arguments `jac_ad=:ForwardDiffSparse`, `alg=Sundials.CVODE_BDF(linear_solver=:KLU)`
 to use the Julia [ForwardDiff](https://github.com/JuliaDiff/ForwardDiff.jl) package to provide the Jacobian with
 forward-mode automatic differentiation and automatic sparsity detection.
+
+# Implementation
+Follows the SciML standard pattern:
+- Create [`DAEfunction`](@ref)
+- Call [`get_inconsistent_initial_deriv`](@ref) -> `initial_deriv`
+- Create `SciMLBase.DAEproblem`
+- Call `SciMLBase.solve`
+and then 
+- Call [`print_sol_stats`](@ref)
+- Call [`calc_output_sol!`](@ref) to recalculate model fields at timesteps used
 
 # Keywords 
 As [`integrate`](@ref), with defaults:
@@ -276,21 +266,33 @@ function integrateDAE(
         jac_ad_t_sparsity=jac_ad_t_sparsity,    
         init_logger=init_logger,
     )
-    
-    prob = DAEproblem(
-        func, modeldata, initial_state, tspan;
+   
+    differential_vars = PB.state_vars_isdifferential(modeldata.solver_view_all)
+
+    # create inconsistent initial conditions for DAE variables, rely on DAE solver to find them
+    initial_deriv = get_inconsistent_initial_deriv(
+        initial_state, modeldata, tspan[1], differential_vars, func.f
     )
 
-    @info "integrateDAE:  DAEProblem using algorithm: $alg Jacobian $jac_ad"
-
-    sol = solve(
-        prob, alg;     
-        solvekwargs=solvekwargs,
-        BLAS_num_threads=BLAS_num_threads,
+    prob = SciMLBase.DAEProblem(
+        func, initial_deriv, initial_state, tspan, nothing,
+        differential_vars=differential_vars,
     )
+
+    io = IOBuffer()
+    println(io, lpad("", 80, "="))
+    println(io, "integrateDAE:  DAEProblem using algorithm: $alg Jacobian $jac_ad")
+    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
+    println(io, "    using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads")
+    println(io, lpad("", 80, "="))
+    @info String(take!(io))
+   
+    @time sol = SciMLBase.solve(prob, alg; solvekwargs...);
+
+    print_sol_stats(sol)
     
     if !isnothing(outputwriter)
-        calc_output_sol(outputwriter, run.model, sol, tspan, initial_state, modeldata)
+        calc_output_sol!(outputwriter, run.model, sol, tspan, initial_state, modeldata)
     end
 
     return sol
@@ -355,7 +357,11 @@ function (m::ModelODE)(du,u, p, t)
 end
 
 
-"return mass matrix (diagonal matrix with 1.0 for ODE variable, 0.0 for algebraic constraint)"
+"""
+    get_massmatrix(modeldata) -> LinearAlgebra.Diagonal
+
+Return mass matrix (diagonal matrix with 1.0 for ODE variable, 0.0 for algebraic constraint)
+"""
 function get_massmatrix(modeldata)
     iszero(PB.num_total(modeldata.solver_view_all)) ||
         error("get_massmatrix - implicit total variables, not in mass matrix DAE form")
@@ -423,8 +429,14 @@ function (m::ModelDAE)(resid, dsdt, s, p, t)
 end
 
 
-"Create (inconsistent) initial_deriv for a DAE problem: ODE variables are consistent, DAE variables set to zero 
-ie rely on DAE solver to find them"
+"""
+    get_inconsistent_initial_deriv(
+        initial_state, modeldata, initial_t, differential_vars, modeldae::ModelDAE
+    ) -> initial_deriv
+
+Create (inconsistent) `initial_deriv` for a DAE problem: ODE variables are consistent, DAE variables set to zero 
+ie rely on DAE solver to find them
+"""
 function get_inconsistent_initial_deriv(
     initial_state, modeldata, initial_t, differential_vars, modeldae::ModelDAE
 )
@@ -485,14 +497,33 @@ function get_inconsistent_initial_deriv(
     return initial_deriv
 end  
 
-"iterate through solution from ODEProblem, DAEProblem and calculate forcings, diagnostics etc 
-(functions of state variables and time)"
-function calc_output_sol(outputwriter, model::PB.Model, sol, tspan, initial_state, modeldata)
+"""
+    calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.ODESolution, tspan, initial_state, modeldata)
+    calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.DAESolution, tspan, initial_state, modeldata)
+    calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.NonlinearSolution, tspan, initial_state, modeldata)
+    calc_output_sol!(outputwriter, model::PB.Model, tsoln::AbstractVector, soln::AbstractVector,  modeldata)
+
+Iterate through solution and recalculate model fields
+(functions of state variables and time) and store in `outputwriter`.
+
+# Arguments
+- `outputwriter::PALEOmodel.AbstractOutputWriter`: container for output
+- `model::PB.Model` used to calculate solution
+- `sol`: SciML solution object
+- `tspan`:  (tstart, tstop) integration start and stop times
+- `initial_state::AbstractVector`: initial state vector
+- `tsoln::AbstractVector`:  solution times
+- `soln::AbstractVector`: solution state variables
+- `modeldata::PB.Modeldata`: ModelData struct
+"""
+function calc_output_sol! end
+
+function calc_output_sol!(outputwriter, model::PB.Model, sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution}, tspan, initial_state, modeldata)
     
-    @info "ODE.calc_output_sol: $(length(sol)) records"
+    @info "ODE.calc_output_sol!: $(length(sol)) records"
     if length(sol.t) != length(sol)
         toffbodge = length(sol.t) - length(sol)
-        @warn "ODE.calc_output_sol: Bodging a DifferentialEquations.jl issue - "*
+        @warn "ODE.calc_output_sol!: Bodging a DifferentialEquations.jl issue - "*
             "length(sol.t) $(length(sol.t)) != length(sol) $(length(sol)), omitting first $toffbodge point(s) from sol.t"
     else
         toffbodge = 0
@@ -512,12 +543,11 @@ function calc_output_sol(outputwriter, model::PB.Model, sol, tspan, initial_stat
         PALEOmodel.OutputWriters.add_record!(outputwriter, model, modeldata, tmodel)
     end
 
-    @info "ODE.calc_output_sol: done"
+    @info "ODE.calc_output_sol!: done"
     return nothing
 end
 
-# from SteadyStateProblem
-function calc_output_sol(outputwriter, model::PB.Model, sol::SciMLBase.NonlinearSolution, tspan, initial_state, modeldata)
+function calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.NonlinearSolution, tspan, initial_state, modeldata)
 
     PALEOmodel.OutputWriters.initialize!(outputwriter, model, modeldata, 1)
 
@@ -533,9 +563,7 @@ function calc_output_sol(outputwriter, model::PB.Model, sol::SciMLBase.Nonlinear
     return nothing
 end
 
-"iterate through vector `soln` of state variables at each model time `tsoln`, (re)calculate model fields, 
-and store in `outputwriter`"
-function calc_output_sol(outputwriter, model::PB.Model, tsoln, soln,  modeldata)
+function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln,  modeldata)
 
     PALEOmodel.OutputWriters.initialize!(outputwriter, model, modeldata, length(tsoln))
 
@@ -551,43 +579,52 @@ function calc_output_sol(outputwriter, model::PB.Model, tsoln, soln,  modeldata)
     return nothing
 end
 
-# from ODEProblem, DAEProblem
-function print_sol_stats(sol)
+"""
+    print_sol_stats(sol::SciMLBase.ODESolution)
+    print_sol_stats(sol::SciMLBase.DAESolution)
+    print_sol_stats(sol::SciMLBase.NonlinearSolution)
 
-    @info lpad("", 80, "=")
-    @info "print_sol_stats:"
-    @info "  retcode=$(sol.retcode)"
-    @info "  nsteps $(length(sol.t))"
+Print solution statistics
+"""
+function print_sol_stats end
 
-    # println(sol.prob)
-    @info "  alg=$(sol.alg)"
-    @info "  $(sol.destats)"
-    @info "  length(sol.t) $(length(sol.t))"
-    @info "  size(sol) $(size(sol))"
-    @info lpad("", 80, "=")
+function print_sol_stats(sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution})
+
+    io = IOBuffer()
+    println(io, lpad("", 80, "="))
+    println(io, "print_sol_stats:")
+    println(io, "  retcode=$(sol.retcode)")
+    println(io, "  nsteps $(length(sol.t))")
+
+    # println(io, "  prob=$(sol.prob)")
+    println(io, "  alg=$(sol.alg)")
+    println(io, "  $(sol.destats)")
+    println(io, "  length(sol.t) $(length(sol.t))")
+    println(io, "  size(sol) $(size(sol))")
+    println(io, lpad("", 80, "="))
+
+    @info String(take!(io))
 
     return nothing
 end
 
-# from SteadyStateProblem
 function print_sol_stats(sol::SciMLBase.NonlinearSolution)
 
-    @info lpad("", 80, "=")
-    @info "print_sol_stats:"
-    @info "  retcode=$(sol.retcode)"
+    io = IOBuffer()
+    println(io, lpad("", 80, "="))
+    println(io, "print_sol_stats:")
+    println(io, "  retcode=$(sol.retcode)")
     
-    @info "  prob=$(sol.prob)"
-    @info "  alg=$(sol.alg)"   
+    # println(io, "  prob=$(sol.prob)")
+    println(io, "  alg=$(sol.alg)")
    
-    @info "  size(sol) $(size(sol))"
-    @info lpad("", 80, "=")
+    println(io, "  size(sol) $(size(sol))")
+    println(io, lpad("", 80, "="))
+
+    @info String(take!(io))
 
     return nothing
 end
-
-
-
-
 
 
 end
