@@ -15,6 +15,8 @@ end
 
 # include("Plot.jl")
 
+include("SolverView.jl")
+
 include("Run.jl")
 
 include("JacobianAD.jl")

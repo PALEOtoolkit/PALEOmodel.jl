@@ -85,7 +85,7 @@ function initialize!(
     PB.check_ready(model, modeldata, expect_hostdep_varnames=expect_hostdep_varnames)
 
     # Create modeldata.solver_view_all for the entire model
-    PB.set_default_solver_view!(model, modeldata)    
+    set_default_solver_view!(model, modeldata)    
 
     # Initialize model Reaction data arrays (calls ReactionMethod.preparefn)
     # Set modeldata.dispatchlists_all for the entire model
@@ -96,7 +96,7 @@ function initialize!(
 
     # Initialise state variables to norm_value
     PB.dispatch_setup(model, :norm_value, modeldata)
-    PB.copy_norm!(modeldata.solver_view_all)
+    PALEOmodel.copy_norm!(modeldata.solver_view_all)
 
     # Initialise state variables etc     
     PB.dispatch_setup(model, :initial_value, modeldata)
@@ -122,7 +122,7 @@ function initialize!(
         end
     end
 
-    initial_state = PB.get_statevar(modeldata.solver_view_all)
+    initial_state = get_statevar(modeldata.solver_view_all)
      
     
     return (initial_state, modeldata)

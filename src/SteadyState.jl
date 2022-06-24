@@ -58,9 +58,9 @@ function steadystate(
 
     sv = modeldata.solver_view_all
     # check for implicit total variables
-    iszero(PB.num_total(sv)) || error("implicit total variables, not in constant mass matrix DAE form")
+    iszero(PALEOmodel.num_total(sv)) || error("implicit total variables, not in constant mass matrix DAE form")
    
-    iszero(PB.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+    iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
        
     # workspace array 
     worksp = similar(initial_state)
@@ -68,7 +68,7 @@ function steadystate(
     state_norm_factor = ones(length(worksp))
     if use_norm
         @info "steadystate: using PALEO normalisation for state variables and time derivatives"
-        state_norm_factor  .= PB.get_statevar_norm(sv)       
+        state_norm_factor  .= PALEOmodel.get_statevar_norm(sv)       
     end
 
     # calculate normalized residual F = dS/dt
@@ -302,16 +302,34 @@ function steadystate_ptcForwardDiff(
     )
 end
 
-# Deprecated form
-steadystate_ptc(
+function steadystate_ptc(
     run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
-) = steadystate_ptc(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
-  
-# Deprecated form
-steadystate_ptcForwardDiff(
+) 
+    Base.depwarn(
+        """
+        steadystate_ptc(run, initial_state, modeldata, tss, deltat_initial, tss_max; kwargs...)
+            is deprecated. Please use 
+        steadystate_ptc(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)""",
+        :steadystate_ptc,
+        force=true
+    )
+    return steadystate_ptc(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
+end
+
+function steadystate_ptcForwardDiff(
     run, initial_state, modeldata, tss::Float64, deltat_initial::Float64, tss_max::Float64; kwargs...
-) = steadystate_ptcForwardDiff(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
-  
+) 
+    Base.depwarn(
+        """
+        steadystate_ptcForwardDiff(run, initial_state, modeldata, tss, deltat_initial, tss_max; kwargs...)
+            is deprecated. Please use 
+        steadystate_ptcForwardDiff(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
+        """,
+        :steadystate_ptcForwardDiff,
+        force=true
+    )
+    return steadystate_ptcForwardDiff(run, initial_state, modeldata, (tss, tss_max), deltat_initial; kwargs...)
+end
 
 """
     nlsolveF_PTC(
@@ -334,8 +352,8 @@ function nlsolveF_PTC(
 )
     sv = modeldata.solver_view_all
     # We only support explicit ODE-like configurations (no DAE constraints or implicit variables)
-    iszero(PB.num_total(sv))                 || error("implicit total variables not supported")
-    iszero(PB.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+    iszero(PALEOmodel.num_total(sv))                 || error("implicit total variables not supported")
+    iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
 
     # previous_state is state at previous timestep
     previous_state = similar(initial_state)
@@ -348,7 +366,7 @@ function nlsolveF_PTC(
     state_norm_factor  = ones(length(worksp))
     if use_norm
         @info "steadystate: using PALEO normalisation for state variables and time derivatives"
-        state_norm_factor  .= PB.get_statevar_norm(sv)       
+        state_norm_factor  .= PALEOmodel.get_statevar_norm(sv)       
     end
 
     # current time and deltat (Refs are passed into function objects, and then updated each timestep)

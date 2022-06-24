@@ -2,6 +2,19 @@
 
 # PALEOmodel solvers
 
+## SolverView
+```@meta
+CurrentModule = PALEOmodel
+```
+A [`SolverView`](@ref) uses a collection of `PALEOboxes.VariableAggregator`s to assemble model state Variables and associated time derivatives into contiguous Vectors, for the convenience of standard numerical ODE / DAE solvers.  See [Mathematical formulation of the reaction-transport problem](@ref). 
+```@docs
+SolverView
+create_solver_view
+set_default_solver_view!
+copy_norm!
+set_statevar!
+get_statevar_sms!
+```
 
 ## Initialization
 ```@meta
@@ -11,7 +24,7 @@ CurrentModule = PALEOmodel
 initialize!
 ```
 
-## [DifferentialEquations](https://github.com/SciML/DifferentialEquations.jl) solvers
+## DifferentialEquations solvers
 
 Wrappers for the Julia [DifferentialEquations](https://github.com/SciML/DifferentialEquations.jl) package ODE and DAE solvers.  These are usually appropriate for smaller biogeochemical models.
 
