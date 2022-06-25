@@ -13,7 +13,7 @@ import DataFrames
 import FileIO
 import JLD2
 
-using Infiltrator # Julia debugger
+# using Infiltrator # Julia debugger
 
 
 ##################################
@@ -675,28 +675,12 @@ function PB.add_field!(output::OutputMemory, fr::PALEOmodel.FieldRecord)
     return PB.add_field!(output.domains[domainname], fr)
 end
 
+function PB.get_data(output::OutputMemory, varnamefull::AbstractString; records=nothing)
 
-PB.get_data(output::OutputMemory, varname::AbstractString; records=nothing) =
-    _get_outputvar(output, nothing, varname, records)
-
-
-"""
-    _get_outputvar(output, defaultdomainname, varnamefull [records=nothing]) -> values
-
-DEPRECATED: use [`get_data`](@ref)
-
-Get raw data for output variable specified by `defaultdomainname`, `varnamefull`, optionally selecting `records`.
-If `varnamefull` specifies a domain (is of form `<domainname>.<varname>`), then this domain is used,
-otherwise `defaultdomain` is used.
-"""
-function _get_outputvar(
-    output::OutputMemory, defaultdomainname, varnamefull, records=nothing
-)
-  
-    domainname, varname = domain_variable_name(varnamefull, defaultdomainname=defaultdomainname)
+    domainname, varname = domain_variable_name(varnamefull, defaultdomainname=nothing)
     
     haskey(output.domains, domainname) || 
-        error("Variable $varname not found in output: domain $(domainname) not present")
+        error("Variable $varnamefull not found in output: domain $(domainname) not present")
 
     odom = output.domains[domainname]
     df = odom.data

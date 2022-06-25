@@ -59,7 +59,7 @@ function integrateLocalIMEXEuler(
 
     @info "integrateLocalIMEXEuler: Δt_outer=$Δt_outer (yr)"
 
-    solver_view_outer = PB.create_solver_view(run.model, modeldata, cellranges_outer)
+    solver_view_outer = PALEOmodel.create_solver_view(run.model, modeldata, cellranges_outer)
     @info "solver_view_outer: $(solver_view_outer)"    
     
     lictxt = create_timestep_LocalImplicit_ctxt(
@@ -132,7 +132,7 @@ function timestep_LocalImplicit(
             cell_context = lictxt.cell_context[cell_idx]
 
             # statevar at previous timestep
-            PB.get_statevar!(S_previous, cell_context.solverview)
+            PALEOmodel.get_statevar!(S_previous, cell_context.solverview)
 
             (Lnorm_inf_cell, Lnorm_2_cell) = calc_residual(S_previous, lictxt, cell_idx, Δt)
             (Lnorm_inf_init_cell, Lnorm_2_init_cell) = (Lnorm_inf_cell, Lnorm_2_cell)
@@ -201,11 +201,11 @@ function getLocalImplicitContext(
     cellrange_cell = PB.CellRange(cellrange.domain, cellrange.operatorID, first(cellrange.indices) )
 
     # get SolverView for all Variables required for cellrange derivative
-    solver_view_all_cell = PB.create_solver_view(model, modeldata, [cellrange_cell], indices_from_cellranges=true)
+    solver_view_all_cell = PALEOmodel.create_solver_view(model, modeldata, [cellrange_cell], indices_from_cellranges=true)
     @info "getLocalImplicitContext: all Variables (first cell) $solver_view_all_cell)"  
  
     # get reduced set of Variables required for nonlinear solve
-    solver_view_cell = PB.create_solver_view(
+    solver_view_cell = PALEOmodel.create_solver_view(
         model, modeldata, [cellrange_cell], 
         exclude_var_nameroots=exclude_var_nameroots,
         indices_from_cellranges=true,
@@ -226,8 +226,8 @@ function getLocalImplicitContext(
     length(excluded_vars) == length(excluded_sms_vars) ||
         error("excluded_vars and excluded_sms_vars length mismatch")
 
-    n_all = length(PB.get_statevar(solver_view_all_cell))
-    n_solve = length(PB.get_statevar(solver_view_cell))
+    n_all = length(PALEOmodel.get_statevar(solver_view_all_cell))
+    n_solve = length(PALEOmodel.get_statevar(solver_view_cell))
 
     cellrange_length = length(cellrange.indices)
     @info "  n_all $n_all solving for $n_solve dof x domain length $cellrange_length = $(n_solve*cellrange_length)"
@@ -253,31 +253,31 @@ function getLocalImplicitContext(
     jacconf = ForwardDiff.JacobianConfig(nothing, u_worksp, u_worksp, ForwardDiff.Chunk{chunksize}())
  
     # temporarily replace modeldata with norm so can read back per-cell norms
-    statevar_all_current = PB.get_statevar(modeldata.solver_view_all)
-    PB.uncopy_norm!(modeldata.solver_view_all)
+    statevar_all_current = PALEOmodel.get_statevar(modeldata.solver_view_all)
+    PALEOmodel.uncopy_norm!(modeldata.solver_view_all)
     # create per-cell solver_view, dispatchlists, jac
     cell_context = []
     for i in cellrange.indices
         # (ab)use that fact that Julia allows iteration over scalar i (to optimise out loop over cellrange.indices)
         cellrange = PB.CellRange(cellrange.domain, cellrange.operatorID, i) 
 
-        solverview = PB.create_solver_view(
+        solverview = PALEOmodel.create_solver_view(
             model, modeldata, [cellrange], 
             exclude_var_nameroots=exclude_var_nameroots,
             indices_from_cellranges=true,
             hostdep_all=false,
         )
-        PB.copy_norm!(solverview)
-        statevar_norm = PB.get_statevar_norm(solverview)
-        statevar_sms_norm = PB.get_statevar_sms_norm(solverview)
+        PALEOmodel.copy_norm!(solverview)
+        statevar_norm = PALEOmodel.get_statevar_norm(solverview)
+        statevar_sms_norm = PALEOmodel.get_statevar_sms_norm(solverview)
 
-        solverview_ad = PB.create_solver_view(
+        solverview_ad = PALEOmodel.create_solver_view(
             model, modeldata_ad, [cellrange], 
             exclude_var_nameroots=exclude_var_nameroots,
             indices_from_cellranges=true,
             hostdep_all=false,
         )
-        PB.copy_norm!(solverview_ad)
+        PALEOmodel.copy_norm!(solverview_ad)
 
         dispatchlists = PB.create_dispatch_methodlists(model, modeldata, [cellrange])
         dispatchlists_ad = PB.create_dispatch_methodlists(model, modeldata_ad, [cellrange])
@@ -295,7 +295,7 @@ function getLocalImplicitContext(
     cell_context = [c for c in cell_context] # narrow type
    
     # replace modeldata statevar (temporarily was set to norm)
-    PB.set_statevar!(modeldata.solver_view_all, statevar_all_current)
+    PALEOmodel.set_statevar!(modeldata.solver_view_all, statevar_all_current)
 
     return (;n_solve, modeldata_ad, J, cell_mat, u_worksp, cell_residual, cell_S_previous, cell_context, va_excluded, va_sms_excluded)
 end
@@ -310,14 +310,14 @@ function calc_residual(S_previous, lictxt, cell_idx, deltat)
 
     # get subset of state vector given by solver_view_cell
     S_next = lictxt.u_worksp # temporary workspace
-    PB.get_statevar!(S_next, cell_context.solverview)
+    PALEOmodel.get_statevar!(S_next, cell_context.solverview)
 
     # derivative at S_next for our subset of Variables and indices given by cellrange
     # NB: this will update all Variables including excluded Variables, not just those needed for nonlinear_solve
     PB.do_deriv(cell_context.dispatchlists, deltat)
     # get derivative
     dSdt_next = lictxt.cell_residual # temporary workspace
-    PB.get_statevar_sms!(dSdt_next, cell_context.solverview)
+    PALEOmodel.get_statevar_sms!(dSdt_next, cell_context.solverview)
 
     # calculate residual, accumulating norms as we go
     Linfnorm = 0.0
@@ -350,7 +350,7 @@ function local_newton_update(::Val{Ncomps}, lictxt, cell_idx, t, deltat) where N
 
     # calculate Jacobian at current value of S_next 
     S_next = lictxt.u_worksp
-    PB.get_statevar!(S_next, cell_context.solverview)
+    PALEOmodel.get_statevar!(S_next, cell_context.solverview)
     cell_context.jac_cell(lictxt.J, S_next, nothing, t)
    
     # workspace to gather per-cell values
@@ -380,7 +380,7 @@ function local_newton_update(::Val{Ncomps}, lictxt, cell_idx, t, deltat) where N
     end
    
     # update S_next estimate
-    PB.add_statevar!(cell_context.solverview, 1.0, lictxt.u_worksp)
+    PALEOmodel.add_statevar!(cell_context.solverview, 1.0, lictxt.u_worksp)
 
     return nothing
 end

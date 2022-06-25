@@ -1,6 +1,6 @@
 module ODEfixed
 
-import Infiltrator
+# import Infiltrator
 
 import PALEOboxes as PB
 
@@ -96,9 +96,9 @@ function integrateSplitEuler(
 
     @info "integrateSplitEuler: Δt_outer=$Δt_outer (yr) n_inner=$n_inner"
 
-    solver_view_outer = PB.create_solver_view(run.model, modeldata, cellranges_outer)
+    solver_view_outer = PALEOmodel.create_solver_view(run.model, modeldata, cellranges_outer)
     @info "solver_view_outer: $(solver_view_outer)"    
-    solver_view_inner = PB.create_solver_view(run.model, modeldata, cellranges_inner)
+    solver_view_inner = PALEOmodel.create_solver_view(run.model, modeldata, cellranges_inner)
     @info "solver_view_inner: $(solver_view_inner)"
     
     timesteppers = [
@@ -170,7 +170,7 @@ function integrateEulerthreads(
         error("integrateEulerthreads: length(cellranges) $lc != nthreads $nt")
 
     # get solver_views for each threadid
-    solver_views = [PB.create_solver_view(run.model, modeldata, crs) for crs in cellranges]
+    solver_views = [PALEOmodel.create_solver_view(run.model, modeldata, crs) for crs in cellranges]
     @info "integrateEulerthreads: solver_views:" 
     for t in 1:Threads.nthreads()
         @info "  thread $t  $(solver_views[t])"
@@ -248,8 +248,8 @@ function integrateSplitEulerthreads(
         error("integrateSplitEulerthreads: length(cellranges_inner) $lc_inner != nthreads $nt")
 
     # get solver_views for each threadid
-    solver_views_outer = [PB.create_solver_view(run.model, modeldata, crs) for crs in cellranges_outer]
-    solver_views_inner = [PB.create_solver_view(run.model, modeldata, crs) for crs in cellranges_inner]
+    solver_views_outer = [PALEOmodel.create_solver_view(run.model, modeldata, crs) for crs in cellranges_outer]
+    solver_views_inner = [PALEOmodel.create_solver_view(run.model, modeldata, crs) for crs in cellranges_inner]
     @info "integrateSplitEulerthreads: solver_views_outer:" 
     for t in 1:Threads.nthreads()
         @info "  thread $t $(solver_views_outer[t])"
@@ -339,7 +339,7 @@ function create_timestep_Euler_ctxt(
     verbose=false,
 )
 
-    num_constraints = PB.num_algebraic_constraints(solver_view)
+    num_constraints = PALEOmodel.num_algebraic_constraints(solver_view)
     iszero(num_constraints) || error("DAE problem with $num_constraints algebraic constraints")
 
     dispatch_lists = PB.create_dispatch_methodlists(model, modeldata, cellranges, verbose=false)
@@ -384,7 +384,7 @@ function integrateFixed(
                 )
             end
         end
-                 
+
         PALEOmodel.OutputWriters.add_record!(outputwriter, model, modeldata, tmodel)
         return nothing
     end
@@ -392,8 +392,10 @@ function integrateFixed(
 
     # set initial state
     touter = tspan[1]
+
     PB.set_tforce!(modeldata.solver_view_all, touter)
-    PB.set_statevar!(modeldata.solver_view_all, initial_state)
+
+    PALEOmodel.set_statevar!(modeldata.solver_view_all, initial_state)
 
     # write initial state and combined time derivative
     write_output_record(outputwriter, run.model, modeldata, timesteppers, touter, Δt_outer)
@@ -478,7 +480,7 @@ function integrateFixedthreads(
     # write initial state
     touter = tspan[1]
     PB.set_tforce!(modeldata.solver_view_all, touter)
-    PB.set_statevar!(modeldata.solver_view_all, initial_state)
+    PALEOmodel.set_statevar!(modeldata.solver_view_all, initial_state)
     inextoutput = 2
 
     integrator_barrier = PALEOmodel.ThreadBarriers.ThreadBarrierAtomic("integrator barrier")

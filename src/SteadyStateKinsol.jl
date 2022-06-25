@@ -66,8 +66,8 @@ function steadystate_ptc(
  
     sv = modeldata.solver_view_all
     # We only support explicit ODE-like configurations (no DAE constraints or implicit variables)
-    iszero(PB.num_total(sv))                 || error("implicit total variables not supported")
-    iszero(PB.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+    iszero(PALEOmodel.num_total(sv))                 || error("implicit total variables not supported")
+    iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
 
     
     # Define preconditioner setup function
@@ -111,11 +111,11 @@ function steadystate_ptc(
              
         
         PB.set_tforce!(d.modeldata.solver_view_all, d.tmodel[])
-        PB.set_statevar!(d.modeldata.solver_view_all, u) 
+        PALEOmodel.set_statevar!(d.modeldata.solver_view_all, u) 
 
         PB.do_deriv(d.modeldata.dispatchlists_all)
 
-        PB.get_statevar_sms!(d.deriv_worksp, d.modeldata.solver_view_all)
+        PALEOmodel.get_statevar_sms!(d.deriv_worksp, d.modeldata.solver_view_all)
         resid .=  (u .- d.current_state .- d.deltat[].*d.deriv_worksp)
 
         return nothing
@@ -146,7 +146,7 @@ function steadystate_ptc(
     )
         if !isempty(d.transfer_data_ad)
             PB.set_tforce!(d.modeldata.solver_view_all, d.tmodel[])
-            PB.set_statevar!(d.modeldata.solver_view_all, u)                 
+            PALEOmodel.set_statevar!(d.modeldata.solver_view_all, u)                 
             PB.do_deriv(d.modeldata.dispatchlists_all)
             # transfer Variables not recalculated by Jacobian
             for (td_ad, td) in zip(d.transfer_data_ad, d.transfer_data)                
@@ -187,13 +187,13 @@ function steadystate_ptc(
         for i in eachindex(u)
             d.directional_workspace[i] = ForwardDiff.Dual(u[i], v[i])
         end
-        PB.set_statevar!(d.directional_sv, d.directional_workspace)                       
+        PALEOmodel.set_statevar!(d.directional_sv, d.directional_workspace)                       
 
         PB.do_deriv(d.directional_dispatchlists)
 
         # resid .=  (u .- d.current_state - d.deltat[].*d.deriv_worksp)
 
-        PB.get_statevar_sms!(d.directional_workspace, d.directional_sv)
+        PALEOmodel.get_statevar_sms!(d.directional_workspace, d.directional_sv)
         for i in eachindex(u)
             # use: partials(Dual(u,v)) = v for first term
             #      d.current_state is a constant so no second term

@@ -48,11 +48,11 @@ function ODEfunction(
 )
 
     # check for implicit total variables
-    PB.num_total(modeldata.solver_view_all) == 0 ||
+    PALEOmodel.num_total(modeldata.solver_view_all) == 0 ||
         error("ODEfunction: implicit total variables, not in constant mass matrix DAE form - use DAE solver")
 
     # if a DAE, construct mass matrix
-    num_constraints = PB.num_algebraic_constraints(modeldata.solver_view_all)
+    num_constraints = PALEOmodel.num_algebraic_constraints(modeldata.solver_view_all)
     if iszero(num_constraints)
         M = LinearAlgebra.I        
     else
@@ -267,7 +267,7 @@ function integrateDAE(
         init_logger=init_logger,
     )
    
-    differential_vars = PB.state_vars_isdifferential(modeldata.solver_view_all)
+    differential_vars = PALEOmodel.state_vars_isdifferential(modeldata.solver_view_all)
 
     # create inconsistent initial conditions for DAE variables, rely on DAE solver to find them
     initial_deriv = get_inconsistent_initial_deriv(
@@ -327,7 +327,7 @@ end
 
 Function object to calculate model derivative and adapt to SciML ODE solver interface
 """
-mutable struct ModelODE{T, S <: PB.SolverView, D}
+mutable struct ModelODE{T, S <: PALEOmodel.SolverView, D}
     modeldata::PB.ModelData{T}
     solver_view::S
     dispatchlists::D
@@ -344,12 +344,12 @@ end
 
 function (m::ModelODE)(du,u, p, t)
    
-    PB.set_statevar!(m.solver_view, u)
+    PALEOmodel.set_statevar!(m.solver_view, u)
     PB.set_tforce!(m.solver_view, t)
 
     PB.do_deriv(m.dispatchlists)
 
-    PB.get_statevar_sms!(du, m.solver_view)
+    PALEOmodel.get_statevar_sms!(du, m.solver_view)
    
     m.nevals += 1  
 
@@ -363,12 +363,12 @@ end
 Return mass matrix (diagonal matrix with 1.0 for ODE variable, 0.0 for algebraic constraint)
 """
 function get_massmatrix(modeldata)
-    iszero(PB.num_total(modeldata.solver_view_all)) ||
+    iszero(PALEOmodel.num_total(modeldata.solver_view_all)) ||
         error("get_massmatrix - implicit total variables, not in mass matrix DAE form")
     return LinearAlgebra.Diagonal(
         [
             d ? 1.0 : 0.0 
-            for d in PB.state_vars_isdifferential(modeldata.solver_view_all)
+            for d in PALEOmodel.state_vars_isdifferential(modeldata.solver_view_all)
         ]
     )
 end
@@ -378,7 +378,7 @@ end
 
 Function object to calculate model residual and adapt to SciML DAE solver interface
 """
-mutable struct ModelDAE{T, S <: PB.SolverView, D, O}
+mutable struct ModelDAE{T, S <: PALEOmodel.SolverView, D, O}
     modeldata::PB.ModelData{T}
     solver_view::S
     dispatchlists::D
@@ -390,7 +390,7 @@ end
  resid = G(dsdt,s,p,t) = -duds*dsdt + F(u(s))"
 function (m::ModelDAE)(resid, dsdt, s, p, t)
     
-    PB.set_statevar!(m.solver_view, s)
+    PALEOmodel.set_statevar!(m.solver_view, s)
     PB.set_tforce!(m.solver_view, t)
 
     # du(s)/dt
@@ -450,7 +450,7 @@ function get_inconsistent_initial_deriv(
     m(initial_deriv, initial_state , nothing, initial_t)
 
     # Find consistent initial conditions for implicit variables (if any)
-    if PB.num_total(modeldata.solver_view_all) > 0
+    if PALEOmodel.num_total(modeldata.solver_view_all) > 0
         # TODO this finds ds/dt, but doesn't yet solve for State s given Total 
         # (currently will set Total initial conditions from s, which is usually not what is wanted)
         @warn "Calculating Total variables initial conditions from State variables (calculation of State from Total not implemented)"
@@ -536,7 +536,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, sol::Union{SciMLBase.OD
         # call model to (re)calculate
         tmodel = sol.t[tidx+toffbodge]
         PB.set_tforce!(modeldata.solver_view_all, tmodel)   
-        PB.set_statevar!(modeldata.solver_view_all, sol[:, tidx])
+        PALEOmodel.set_statevar!(modeldata.solver_view_all, sol[:, tidx])
             
         PB.do_deriv(modeldata.dispatchlists_all)
 
@@ -554,7 +554,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.Nonlinea
     # call model to (re)calculate
     tmodel = tspan[1]
     PB.set_tforce!(modeldata.solver_view_all, tmodel)
-    PB.set_statevar!(modeldata.solver_view_all, sol.u)
+    PALEOmodel.set_statevar!(modeldata.solver_view_all, sol.u)
 
     PB.do_deriv(modeldata.dispatchlists_all)
 
@@ -571,7 +571,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln,  modeldata
     for i in eachindex(tsoln)
         tmodel = tsoln[i]     
         PB.set_tforce!(modeldata.solver_view_all, tmodel)   
-        PB.set_statevar!(modeldata.solver_view_all, soln[i])
+        PALEOmodel.set_statevar!(modeldata.solver_view_all, soln[i])
         PB.do_deriv(modeldata.dispatchlists_all)
         PALEOmodel.OutputWriters.add_record!(outputwriter, model, modeldata, tmodel)
     end
