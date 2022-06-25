@@ -243,11 +243,12 @@ function create_solver_view(
     reallocate_hostdep_eltype=Float64,
 )
  
-    verbose && @info "create_solver_view:"
+    io = IOBuffer() # only displayed if verbose==true
+    println(io, "create_solver_view:")
     
     check_domains = [cr.domain for cr in cellranges]
     length(check_domains) == length(unique(check_domains)) ||
-        throw(ArgumentError("cellranges contain duplicate Domains"))
+        throw(ArgumentError("create_solver_view: cellranges contain duplicate Domains"))
 
     stateexplicit, stateexplicit_deriv, stateexplicit_cr = PB.VariableDomain[], PB.VariableDomain[], []
     total, total_deriv, total_cr = PB.VariableDomain[], PB.VariableDomain[], []
@@ -255,11 +256,10 @@ function create_solver_view(
     state, state_cr = PB.VariableDomain[], []
     hostdep = PB.VariableDomain[]
 
+    report = []
     for cr in cellranges
-        dom = cr.domain
-              
-        verbose && @info "  Domain $(dom.name) operatorID $(cr.operatorID)"
-        vreport = []
+        dom = cr.domain              
+        crreport = Any[dom.name, cr.operatorID]
         for (vfunction, var_vec, cr_vec, var_deriv_vec, deriv_suffix) in [
             (PB.VF_StateExplicit,  stateexplicit,  stateexplicit_cr,   stateexplicit_deriv,    "_sms"),
             (PB.VF_Total,          total,          total_cr,           total_deriv,            "_sms"),
@@ -284,31 +284,47 @@ function create_solver_view(
                 append!(cr_vec, [indices_from_cellranges ? cr : nothing for v in vars])
             end
 
-            push!(vreport, (vfunction, length(vars)))
+            push!(crreport, length(vars))
         end
-        verbose && @info "    $vreport"
+        push!(report, crreport)    
     end    
+    push!(report, ["Total", "-", length(stateexplicit), length(total), length(constraint), length(state), length(hostdep)])
 
     n_state_vars = length(stateexplicit) + length(state)
     n_equations = length(stateexplicit) + length(total) + length(constraint)
-       
-    verbose && @info "  n_state_vars $n_state_vars  (stateexplicit $(length(stateexplicit)) "*
-        "+ state $(length(state)))"
-    verbose && @info "  n_equations $n_equations  (stateexplicit $(length(stateexplicit)) "*
-        "+ total $(length(total)) + constraint $(length(constraint)))"
-   
+
+    if verbose        
+        colnames = ["Domain", "operatorID", "VF_StateExplicit", "VF_Total", "VF_Constraint", "VF_State", "VF_Undefined"]
+        colwidths = [24,       12,          18,                 18,         18,              18,         18]
+        sep = rpad("", sum(colwidths), "-")
+        println(io, "    host-dependent Variables:")
+        println(io, "    ", sep)
+        println(io, "    ", join(rpad.(colnames, colwidths)))
+        for r in report
+            r == last(report) && println(io, "    ", sep)
+            println(io, "    ", join(rpad.(string.(r), colwidths)))
+        end
+        println(io, "    ", sep)
+        println(io, "  n_state_vars $n_state_vars  (stateexplicit $(length(stateexplicit)) "*
+            "+ state $(length(state)))")
+        println(io, "  n_equations $n_equations  (stateexplicit $(length(stateexplicit)) "*
+            "+ total $(length(total)) + constraint $(length(constraint)))")             
+    end
+
     n_state_vars == n_equations || 
         error("create_solver_view: n_state_vars != n_equations")
 
     if hostdep_all
-        verbose && @info "  including all host-dependent non-state Variables"
+        println(io, "  including all host-dependent non-state Variables")
         empty!(hostdep)
         for dom in model.domains
             dv, _ = PB.get_host_variables(dom, PB.VF_Undefined)
             append!(hostdep, dv )
         end
     end
-    verbose && @info "  host-dependent non-state Variables (:vfunction PB.VF_Undefined): $([PB.fullname(v) for v in hostdep])"
+    println(io, "  host-dependent non-state Variables (:vfunction PB.VF_Undefined): $([PB.fullname(v) for v in hostdep])")
+
+    verbose && @info String(take!(io))  
 
     sv = SolverView(
         eltype(modeldata),

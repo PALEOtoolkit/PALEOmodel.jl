@@ -94,6 +94,9 @@ function initialize!(
     # check Reaction configuration
     PB.check_configuration(model)
 
+    # Initialise Reactions and non-state Variables
+    PB.dispatch_setup(model, :setup, modeldata)
+
     # Initialise state variables to norm_value
     PB.dispatch_setup(model, :norm_value, modeldata)
     PALEOmodel.copy_norm!(modeldata.solver_view_all)
