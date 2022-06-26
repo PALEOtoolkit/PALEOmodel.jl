@@ -3,6 +3,7 @@ module ODE
 import PALEOboxes as PB
 
 import PALEOmodel
+import ..SolverFunctions
 
 import LinearAlgebra
 import SparseArrays
@@ -20,6 +21,11 @@ import Infiltrator
 
 import Sundials
 import SciMLBase
+
+
+Base.@deprecate_binding ModelODE SolverFunctions.ModelODE
+# Base.@deprecate_binding ModelDAE SolverFunctions.ModelDAE
+
 
 ##############################################################
 # Wrappers around SciML function / problem / solve 
@@ -60,7 +66,7 @@ function ODEfunction(
         @info "ODEfunction:  using mass matrix for DAE with $num_constraints algebraic constraints"       
     end
 
-    m = ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
+    m = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
 
     @info "ODEfunction: using Jacobian $jac_ad"
        
@@ -102,7 +108,7 @@ function DAEfunction(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity,
         init_logger=init_logger,
     )
-    m =  ModelDAE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, odeimplicit, 0)
+    m =  SolverFunctions.ModelDAE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, odeimplicit, 0)
     
     f = SciMLBase.DAEFunction{true}(m, jac=jac, jac_prototype=jac_prototype)  
 
@@ -319,43 +325,8 @@ end
 
 
 ###############################################################################
-# Helper functions / adaptors for DifferentialEquations ODE / DAE integrators
+# Helper functions for DifferentialEquations ODE / DAE integrators
 ###############################################################################
-
-"""
-    ModelODE
-
-Function object to calculate model derivative and adapt to SciML ODE solver interface
-"""
-mutable struct ModelODE{T, S <: PALEOmodel.SolverView, D}
-    modeldata::PB.ModelData{T}
-    solver_view::S
-    dispatchlists::D
-    nevals::Int
-end
-
-function ModelODE(
-    modeldata; 
-    solver_view=modeldata.solver_view_all,
-    dispatchlists=modeldata.dispatchlists_all
-)
-    return ModelODE(modeldata, solver_view, dispatchlists, 0)
-end
-
-function (m::ModelODE)(du,u, p, t)
-   
-    PALEOmodel.set_statevar!(m.solver_view, u)
-    PB.set_tforce!(m.solver_view, t)
-
-    PB.do_deriv(m.dispatchlists)
-
-    PALEOmodel.get_statevar_sms!(du, m.solver_view)
-   
-    m.nevals += 1  
-
-    return nothing
-end
-
 
 """
     get_massmatrix(modeldata) -> LinearAlgebra.Diagonal
@@ -373,72 +344,17 @@ function get_massmatrix(modeldata)
     )
 end
 
-"""
-    ModelDAE
-
-Function object to calculate model residual and adapt to SciML DAE solver interface
-"""
-mutable struct ModelDAE{T, S <: PALEOmodel.SolverView, D, O}
-    modeldata::PB.ModelData{T}
-    solver_view::S
-    dispatchlists::D
-    odeimplicit::O
-    nevals::Int
-end
-
-"adapt PALEO model derivative + constraints to SciML DAE problem requirements
- resid = G(dsdt,s,p,t) = -duds*dsdt + F(u(s))"
-function (m::ModelDAE)(resid, dsdt, s, p, t)
-    
-    PALEOmodel.set_statevar!(m.solver_view, s)
-    PB.set_tforce!(m.solver_view, t)
-
-    # du(s)/dt
-    PB.do_deriv(m.dispatchlists)
-
-    # get explicit deriv
-    l_ts = copyto!(resid, m.solver_view.stateexplicit_deriv)
-    # -dudt = -dsdt explicit variables with u(s) = s so duds = I    
-
-    @inbounds for i in 1:l_ts
-        resid[i] -= dsdt[i]
-    end
-
-    # get implicit_deriv     
-    l_ti = length(m.solver_view.total)
-    if l_ti > 0
-        !isnothing(m.odeimplicit) ||
-            error("implicit Total Variables, odeimplicit required")
-
-        copyto!(resid, m.solver_view.total_deriv, dof=l_ts+1)
-
-        # -dudt = -duds*dsdt implicit variables with u(s)
-
-        # calculate duds using AD
-        m.odeimplicit(m.odeimplicit.duds, s, p, t)       
-        # add duds*dsdt to resid
-        resid[(l_ts+1):(l_ts+l_ti)] -= m.odeimplicit.duds*dsdt
-    end
-
-    # add constraints to residual
-    copyto!(resid, m.solver_view.constraints, dof=l_ts+l_ti+1)
-
-    m.nevals += 1  
-
-    return nothing
-end
-
 
 """
     get_inconsistent_initial_deriv(
-        initial_state, modeldata, initial_t, differential_vars, modeldae::ModelDAE
+        initial_state, modeldata, initial_t, differential_vars, modeldae::SolverFunctions.ModelDAE
     ) -> initial_deriv
 
 Create (inconsistent) `initial_deriv` for a DAE problem: ODE variables are consistent, DAE variables set to zero 
 ie rely on DAE solver to find them
 """
 function get_inconsistent_initial_deriv(
-    initial_state, modeldata, initial_t, differential_vars, modeldae::ModelDAE
+    initial_state, modeldata, initial_t, differential_vars, modeldae::SolverFunctions.ModelDAE
 )
  
     initial_deriv = similar(initial_state)
@@ -446,7 +362,7 @@ function get_inconsistent_initial_deriv(
     # Evaluate initial derivative
     # ODE variables will now be consistent, constraint for algebraic variables will not be satisfied 
     # implicit variables will be fixed up below
-    m = ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
+    m = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
     m(initial_deriv, initial_state , nothing, initial_t)
 
     # Find consistent initial conditions for implicit variables (if any)

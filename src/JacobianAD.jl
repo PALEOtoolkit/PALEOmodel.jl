@@ -3,6 +3,7 @@ module JacobianAD
 import PALEOboxes as PB
 
 import PALEOmodel
+import ..SolverFunctions
 
 import LinearAlgebra
 import Infiltrator
@@ -13,6 +14,15 @@ import ForwardDiff
 import SparseArrays
 import SparseDiffTools
 import SparsityTracing
+
+# moved to SolverFunctions
+# Base.@deprecate_binding DerivForwardDiff  SolverFunctions.DerivForwardDiff
+# Base.@deprecate_binding JacODEForwardDiffDense  .. etc
+# Base.@deprecate_binding JacODEForwardDiffSparse
+# Base.@deprecate_binding ImplicitDerivForwardDiff
+# Base.@deprecate_binding ImplicitForwardDiffDense
+# Base.@deprecate_binding ImplicitForwardDiffSparse
+# Base.@deprecate_binding JacDAE SolverFunctions.JacDAE
 
 ######################################################
 # ODE Jacobians using ForwardDiff
@@ -69,7 +79,7 @@ function jac_config_ode(
      
         du_template = similar(state_sms_vars_data)
         
-        jac = JacODEForwardDiffDense(
+        jac = SolverFunctions.JacODEForwardDiffDense(
             modeldata_ad, 
             modeldata_ad.solver_view_all, # use all Variables in model
             jac_dispatchlists, # use only Reactions specified
@@ -111,7 +121,7 @@ function jac_config_ode(
             sparsity = copy(jac_prototype)
         )
 
-        jac = JacODEForwardDiffSparse(
+        jac = SolverFunctions.JacODEForwardDiffSparse(
             modeldata_ad, 
             modeldata_ad.solver_view_all, # use all Variables in model
             jac_dispatchlists, # use only Reactions specified
@@ -127,103 +137,6 @@ function jac_config_ode(
 end
 
 
-"""
-    DerivForwardDiff
-    
-Function object to calculate model derivative in form required by ForwardDiff
-"""
-mutable struct DerivForwardDiff{S, D}
-    solverview::S
-    dispatchlists::D
-end
-
-"model derivative as required by ForwardDiff"
-function (dfd::DerivForwardDiff)(du, u)
-    PALEOmodel.set_statevar!(dfd.solverview, u)
-    PB.do_deriv(dfd.dispatchlists)
-    PALEOmodel.get_statevar_sms!(du, dfd.solverview)         
-
-    return nothing
-end
-
-"""
-    JacODEForwardDiffDense
-
-Function object to calculate dense Jacobian in form required for SciML ODE solver.
-
-`solverview`, `dispatchlists` should correspond to `modeldata`, which should
-have the appropriate element type for ForwardDiff Dual numbers.
-"""
-mutable struct JacODEForwardDiffDense{T, S, D, W, J}
-    modeldata::PB.ModelData{T}
-    deriv_forwarddiff::DerivForwardDiff{S, D}
-    du_template::W
-    jacconf::J    
-    njacs::Int
-    function JacODEForwardDiffDense(
-        modeldata::PB.ModelData{T}, solverview::S, dispatchlists::D, du_template::W, jacconf::J,
-    ) where {T, S, D, W, J}
-        return new{T, S, D, W, J}(
-            modeldata, DerivForwardDiff(solverview, dispatchlists), du_template, jacconf, 0,
-        )
-    end
-end
-
-"Calculate dense Jacobian for ODE solver"
-function (jfdd::JacODEForwardDiffDense)(J, u, p, t)
-   
-    PB.set_tforce!(jfdd.deriv_forwarddiff.solverview, t) # u will be set by deriv_forwarddiff
-   
-    ForwardDiff.jacobian!(J, jfdd.deriv_forwarddiff,  jfdd.du_template, u, jfdd.jacconf)   
-    jfdd.njacs += 1  
-
-    return nothing
-end
-
-"""
-    JacODEForwardDiffSparse
-
-Function object to calculate sparse Jacobian in form required for SciML ODE solver.
-
-`solverview`, `dispatchlists` should correspond to `modeldata`, which should
-have the appropriate element type for ForwardDiff Dual numbers.
-"""
-mutable struct JacODEForwardDiffSparse{T, S, D, J}
-    modeldata::PB.ModelData{T}
-    deriv_forwarddiff::DerivForwardDiff{S, D}
-    jac_cache::J    
-    njacs::Int
-    function JacODEForwardDiffSparse(
-        modeldata::PB.ModelData{T}, solverview::S, dispatchlists::D, jac_cache::J
-    ) where {T, S, D, J}
-        return new{T, S, D, J}(
-            modeldata, DerivForwardDiff(solverview, dispatchlists), jac_cache, 0
-        )
-    end
-end
-
-"Adapt SparseDiffTools.forwarddiff_color_jacobian! to Jacobian function required by DifferentialEquations"
-function (jfds::JacODEForwardDiffSparse)(J, u, p, t)
-    
-    nnz_before = SparseArrays.nnz(J)
-    
-    PB.set_tforce!(jfds.deriv_forwarddiff.solverview, t) # set t only, u will be set by f_deriv_forwarddiff
-    SparseDiffTools.forwarddiff_color_jacobian!(
-        J,
-        jfds.deriv_forwarddiff,
-        u,
-        jfds.jac_cache
-    )
-
-    nnz_before == SparseArrays.nnz(J) || error("Jacobian sparsity changed nnz $(nnz_before) != $(SparseArrays.nnz(J))")
-  
-    countnan = count(isnan, J.nzval)
-    iszero(countnan) || @warn "JacODEForwardDiffSparse: Jacobian contains $countnan NaN at t=$t"
-
-    jfds.njacs += 1  
-    
-    return nothing
-end
 
 
 ###################################################################
@@ -282,13 +195,13 @@ function jac_config_dae(
             )
 
             implicit_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, implicit_cellranges)
-            odeimplicit = ImplicitForwardDiffDense(modeldata_ad, sv_ad, implicit_dispatchlists, duds_template, implicitconf, duds)
+            odeimplicit = SolverFunctions.ImplicitForwardDiffDense(modeldata_ad, sv_ad, implicit_dispatchlists, duds_template, implicitconf, duds)
         end
 
         du_template = similar(state_sms_vars_data)
 
-        jac = JacDAE(
-            JacODEForwardDiffDense(
+        jac = SolverFunctions.JacDAE(
+            SolverFunctions.JacODEForwardDiffDense(
                 modeldata_ad, 
                 modeldata_ad.solver_view_all, 
                 jac_dispatchlists,
@@ -364,7 +277,7 @@ function jac_config_dae(
             implicit_dispatchlists = PB.create_dispatch_methodlists(
                 model, modeldata_ad, implicit_cellranges
             )
-            odeimplicit = ImplicitForwardDiffSparse(
+            odeimplicit = SolverFunctions.ImplicitForwardDiffSparse(
                 modeldata_ad, sv_ad, implicit_dispatchlists, implicit_cache, duds
             )
     
@@ -377,8 +290,8 @@ function jac_config_dae(
             sparsity = copy(jac_prototype)
         )
 
-        jac = JacDAE(
-            JacODEForwardDiffSparse(
+        jac = SolverFunctions.JacDAE(
+            SolverFunctions.JacODEForwardDiffSparse(
                 modeldata_ad, 
                 modeldata_ad.solver_view_all, 
                 jac_dispatchlists,
@@ -396,116 +309,6 @@ function jac_config_dae(
     error("coding error, not reachable reached")
 end
 
-
-mutable struct ImplicitDerivForwardDiff{S, D}
-    solverview::S
-    dispatchlists::D
-end
-
-"model derivative as required by ForwardDiff"
-function (idfd::ImplicitDerivForwardDiff)(T, u)
-    PALEOmodel.set_statevar!(idfd.solverview, u)        
-    PB.do_deriv(idfd.dispatchlists)
-    copyto!(T, idfd.solverview.total)      
-
-    return nothing
-end
-
-mutable struct ImplicitForwardDiffDense{T, S, D, W, I, U}
-    modeldata::PB.ModelData{T}
-    implicitderiv::ImplicitDerivForwardDiff{S, D}
-    duds_template::W
-    implicitconf::I
-    duds::U
-    function ImplicitForwardDiffDense(
-        modeldata::PB.ModelData{T}, solverview::S, dispatchlists::D, duds_template::W, implicitconf::I, duds::U
-    ) where {T, S, D, W, I, U}
-        return new{T, S, D, W, I, U}(
-            modeldata, ImplicitDerivForwardDiff(solverview, dispatchlists), duds_template, implicitconf, duds
-        )
-    end
-end
-
-"Adapt ForwardDiff.jacobian! to calculate dT/dS required for a model containing implicit variables"
-function (ifdd::ImplicitForwardDiffDense)(dTdS, s, p, t)
-    PB.set_tforce!(ifdd.implicitderiv.solverview, t) # set t only, u will be set by implicitderiv
-
-    ForwardDiff.jacobian!(dTdS, ifdd.implicitderiv, ifdd.duds_template, s, ifdd.implicitconf)  
-
-    return  nothing
-end
-
-mutable struct ImplicitForwardDiffSparse{T, S, D, I, U}
-    modeldata::PB.ModelData{T}
-    implicitderiv::ImplicitDerivForwardDiff{S, D}
-    implicit_cache::I
-    duds::U
-    function ImplicitForwardDiffSparse(
-        modeldata::PB.ModelData{T}, solverview::S, dispatchlists::D, implicit_cache::I, duds::U
-    ) where {T, S, D, I, U}
-        return new{T, S, D, I, U}(
-            modeldata, ImplicitDerivForwardDiff(solverview, dispatchlists), implicit_cache, duds
-        )
-    end
-end
-
-"Adapt SparseDiffTools.forwarddiff_color_jacobian! to calculate dT/dS required for model containing implicit variables"
-function (ifds::ImplicitForwardDiffSparse)(dTdS, s, p, t)
-    
-    nnz_before = SparseArrays.nnz(dTdS)
-
-    PB.set_tforce!(ifds.implicitderiv.solverview, t) # set t only, s will be set by f_implicit_forwarddiff
-    SparseDiffTools.forwarddiff_color_jacobian!(
-        dTdS,
-        ifds.implicitderiv,
-        s,
-        ifds.implicit_cache
-    )
-
-    nnz_before == SparseArrays.nnz(dTdS) || error("dTdS sparsity changed nnz $(nnz_before) != $(SparseArrays.nnz(dTdS))")
-    
-    return nothing
-end
-
-
-"""
-    JacDAE
-
-Function object to calculate Jacobian in form required for SciML DAE solver
-
-`odejac` should be a [`JacODEForwardDiffDense`](@ref) or [`JacODEForwardDiffSparse`](@ref)
-
-If using Total variables, `odeimplicit` should be an [`ImplicitForwardDiffDense`](@ref) or [`ImplicitForwardDiffSparse`](@ref),
-otherwise `nothing`.
-"""
-mutable struct JacDAE{J, I}
-    odejac::J
-    odeimplicit::I
-end
-
-"Calculate DAE jacobian (in form required by DifferentialEquations DAE solvers) from an ODE jacobian"
-function (jdae::JacDAE)(J, dsdt, s, p, γ, t)
-    # The Jacobian should be given in the form γ*dG/d(dsdt) + dG/ds where γ is given by the solver
-   
-    # dG/ds
-    jdae.odejac(J,s, p, t)
-
-    md = jdae.odejac.modeldata
-    # γ*dG/d(dsdt) explicit variables with u(s) = s
-    l_ts = length(md.solver_view_all.stateexplicit_deriv)
-    for i in 1:l_ts     
-        J[i,i] -= γ
-    end
-
-    # γ*dG/d(dsdt) = γ*(du/ds)*dG/d(dudt) implicit variables u(s)
-    l_ti = length(md.solver_view_all.total)
-    if l_ti > 0             
-        jdae.odeimplicit(jdae.odeimplicit.duds, s, p, t)        
-        J[(l_ts+1):(l_ts+l_ti), :] -= γ.*jdae.odeimplicit.duds
-    end
-    
-    return nothing
-end
 
 #####################################################################
 # Utility functions to calculate sparsity etc
