@@ -282,7 +282,7 @@ function getLocalImplicitContext(
         dispatchlists = PB.create_dispatch_methodlists(model, modeldata, [cellrange])
         dispatchlists_ad = PB.create_dispatch_methodlists(model, modeldata_ad, [cellrange])
 
-        jac_cell = PALEOmodel.JacobianAD.JacODEForwardDiffDense(
+        jac_cell = PALEOmodel.SolverFunctions.JacODEForwardDiffDense(
             modeldata_ad, 
             solverview_ad,
             dispatchlists_ad,

@@ -19,6 +19,8 @@ include("SolverView.jl")
 
 include("Run.jl")
 
+include("SolverFunctions.jl")
+
 include("JacobianAD.jl")
 
 include("ThreadBarriers.jl")

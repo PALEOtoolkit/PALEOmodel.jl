@@ -2,20 +2,6 @@
 
 # PALEOmodel solvers
 
-## SolverView
-```@meta
-CurrentModule = PALEOmodel
-```
-A [`SolverView`](@ref) uses a collection of `PALEOboxes.VariableAggregator`s to assemble model state Variables and associated time derivatives into contiguous Vectors, for the convenience of standard numerical ODE / DAE solvers.  See [Mathematical formulation of the reaction-transport problem](@ref). 
-```@docs
-SolverView
-create_solver_view
-set_default_solver_view!
-copy_norm!
-set_statevar!
-get_statevar_sms!
-```
-
 ## Initialization
 ```@meta
 CurrentModule = PALEOmodel
@@ -122,3 +108,43 @@ Kinsol.kin_create
 Kinsol.kin_solve
 ```
 
+## Variable aggregation
+```@meta
+CurrentModule = PALEOmodel
+```
+A [`SolverView`](@ref) uses a collection of `PALEOboxes.VariableAggregator`s to assemble model state Variables and associated time derivatives into contiguous Vectors, for the convenience of standard numerical ODE / DAE solvers.  See [Mathematical formulation of the reaction-transport problem](@ref). 
+```@docs
+SolverView
+create_solver_view
+set_default_solver_view!
+copy_norm!
+set_statevar!
+get_statevar_sms!
+```
+
+## Function objects
+```@meta
+CurrentModule = PALEOmodel.SolverFunctions
+```
+Function objects are callable structs with function signatures required by DifferentialEquations or other solvers to calculate
+model time derivative, Jacobian, etc.
+They combine variable aggregation (using `PALEOboxes.VariableAggregator`s or [`PALEOmodel.SolverView`](@ref)) with corresponding
+Reaction dispatch lists.
+
+### ODE function objects
+```@docs
+ModelODE
+ModelODE_at_t
+JacODEForwardDiffDense
+JacODEForwardDiffSparse
+JacODE_at_t
+```
+
+### DAE function objects
+```@docs
+ModelDAE
+JacDAE
+TotalForwardDiff
+ImplicitForwardDiffDense
+ImplicitForwardDiffSparse
+```
