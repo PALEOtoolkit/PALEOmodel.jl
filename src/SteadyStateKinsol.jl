@@ -110,7 +110,7 @@ function steadystate_ptc(
     function ssf!(resid, u, d)       
              
         
-        PB.set_tforce!(d.modeldata.solver_view_all, d.tmodel[])
+        PALEOmodel.set_tforce!(d.modeldata.solver_view_all, d.tmodel[])
         PALEOmodel.set_statevar!(d.modeldata.solver_view_all, u) 
 
         PB.do_deriv(d.modeldata.dispatchlists_all)
@@ -145,7 +145,7 @@ function steadystate_ptc(
         d
     )
         if !isempty(d.transfer_data_ad)
-            PB.set_tforce!(d.modeldata.solver_view_all, d.tmodel[])
+            PALEOmodel.set_tforce!(d.modeldata.solver_view_all, d.tmodel[])
             PALEOmodel.set_statevar!(d.modeldata.solver_view_all, u)                 
             PB.do_deriv(d.modeldata.dispatchlists_all)
             # transfer Variables not recalculated by Jacobian
@@ -183,7 +183,7 @@ function steadystate_ptc(
     )
         # PALEOmodel.JacobianAD.directional_forwarddiff!(Jv, u, v, d, d.tmodel[])
 
-        PB.set_tforce!(d.directional_sv, d.tmodel[])
+        PALEOmodel.set_tforce!(d.directional_sv, d.tmodel[])
         for i in eachindex(u)
             d.directional_workspace[i] = ForwardDiff.Dual(u[i], v[i])
         end

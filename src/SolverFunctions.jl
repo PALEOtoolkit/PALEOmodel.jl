@@ -44,7 +44,7 @@ ModelODE(
 function (m::ModelODE)(du,u, p, t)
    
     PALEOmodel.set_statevar!(m.solver_view, u)
-    PB.set_tforce!(m.solver_view, t)
+    PALEOmodel.set_tforce!(m.solver_view, t)
 
     PB.do_deriv(m.dispatchlists)
 
@@ -235,7 +235,7 @@ end
 function (m::ModelDAE)(G, dsdt, s, p, t)
     
     PALEOmodel.set_statevar!(m.solver_view, s)
-    PB.set_tforce!(m.solver_view, t)
+    PALEOmodel.set_tforce!(m.solver_view, t)
 
     # du(s)/dt
     PB.do_deriv(m.dispatchlists)
@@ -343,7 +343,7 @@ end
 function (tfd::TotalForwardDiff)(T, u)
 
     PALEOmodel.set_statevar!(tfd.solver_view, u)
-    PB.set_tforce!(tfd.solver_view, tfd.t)
+    PALEOmodel.set_tforce!(tfd.solver_view, tfd.t)
 
     PB.do_deriv(tfd.dispatchlists)
 

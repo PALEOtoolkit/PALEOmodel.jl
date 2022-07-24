@@ -203,11 +203,11 @@ function uncopy_norm!(sv::SolverView)
 end
 
 """
-    PB.set_tforce!(sv::SolverView, t)
+    set_tforce!(sv::SolverView, t)
 
 Set `global.tforce` model time (if defined) from t.
 """
-PB.set_tforce!(sv::SolverView, t) = PB.set_tforce!(sv.hostdep, t, allow_missing=true)
+set_tforce!(sv::SolverView, t) = PB.set_values!(sv.hostdep, Val(:global), Val(:tforce), t; allow_missing=true)
 
 
 """
@@ -324,6 +324,17 @@ function create_solver_view(
     end
     println(io, "  host-dependent non-state Variables (:vfunction PB.VF_Undefined): $([PB.fullname(v) for v in hostdep])")
 
+    if !isnothing(reallocate_hostdep_eltype)
+         # If requested, change data type eg to remove AD type    
+        reallocated_variables = PB.reallocate_variables!(hostdep, modeldata, reallocate_hostdep_eltype)
+        if !isempty(reallocated_variables)
+            println(io, "    reallocating host-dependent Variables to eltype $reallocate_hostdep_eltype:")        
+            for (v, old_eltype) in reallocated_variables
+                println(io, "        $(fullname(v)) data $old_eltype -> $reallocate_hostdep_eltype")
+            end
+        end
+    end
+
     verbose && @info String(take!(io))  
 
     sv = SolverView(
@@ -334,7 +345,7 @@ function create_solver_view(
         total_deriv = PB.VariableAggregator(total_deriv, total_cr, modeldata),
         constraints = PB.VariableAggregator(constraint, constraint_cr, modeldata),
         state = PB.VariableAggregator(state, state_cr, modeldata),
-        hostdep = PB.VariableAggregatorNamed(hostdep, modeldata, reallocate_hostdep_eltype=reallocate_hostdep_eltype)
+        hostdep = PB.VariableAggregatorNamed(hostdep, modeldata)
     )
 
     return sv

@@ -109,7 +109,7 @@ function timestep_LocalImplicit(
     length(cellranges) == 1 || error("timestep_LocalImplicit only single cellrange supported")
     cellrange = cellranges[1]
 
-    PB.set_tforce!(modeldata.solver_view_all, touter + Δt)
+    PALEOmodel.set_tforce!(modeldata.solver_view_all, touter + Δt)
     if deriv_only
         # for reporting output fluxes etc 
         for cell_idx in cellrange.indices
@@ -119,7 +119,7 @@ function timestep_LocalImplicit(
     else
         # implicit timestep
         
-        PB.set_tforce!(lictxt.modeldata_ad.solver_view_all, touter + Δt)
+        PALEOmodel.set_tforce!(lictxt.modeldata_ad.solver_view_all, touter + Δt)
 
         S_previous = lictxt.cell_S_previous # workspace
 

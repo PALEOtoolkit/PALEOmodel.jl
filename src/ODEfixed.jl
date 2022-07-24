@@ -313,7 +313,7 @@ function timestep_Euler(
     if deriv_only
         # for reporting output fluxes etc
         if threadid == 1
-            PB.set_tforce!(solver_view, touter)
+            PALEOmodel.set_tforce!(solver_view, touter)
         end
         PB.do_deriv(dispatch_lists, Δt_inner)
     else
@@ -321,7 +321,7 @@ function timestep_Euler(
         for n in 1:n_substep
             tinner = touter + (n-1)*Δt_inner
             if threadid == 1
-                PB.set_tforce!(solver_view, tinner)
+                PALEOmodel.set_tforce!(solver_view, tinner)
             end
             PB.do_deriv(dispatch_lists, Δt_inner)
             PALEOmodel.ThreadBarriers.wait_barrier(integrator_barrier)
@@ -393,7 +393,7 @@ function integrateFixed(
     # set initial state
     touter = tspan[1]
 
-    PB.set_tforce!(modeldata.solver_view_all, touter)
+    PALEOmodel.set_tforce!(modeldata.solver_view_all, touter)
 
     PALEOmodel.set_statevar!(modeldata.solver_view_all, initial_state)
 
@@ -479,7 +479,7 @@ function integrateFixedthreads(
 
     # write initial state
     touter = tspan[1]
-    PB.set_tforce!(modeldata.solver_view_all, touter)
+    PALEOmodel.set_tforce!(modeldata.solver_view_all, touter)
     PALEOmodel.set_statevar!(modeldata.solver_view_all, initial_state)
     inextoutput = 2
 

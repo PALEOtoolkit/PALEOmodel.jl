@@ -451,7 +451,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, sol::Union{SciMLBase.OD
     for tidx in 1:length(sol)
         # call model to (re)calculate
         tmodel = sol.t[tidx+toffbodge]
-        PB.set_tforce!(modeldata.solver_view_all, tmodel)   
+        PALEOmodel.set_tforce!(modeldata.solver_view_all, tmodel)   
         PALEOmodel.set_statevar!(modeldata.solver_view_all, sol[:, tidx])
             
         PB.do_deriv(modeldata.dispatchlists_all)
@@ -469,7 +469,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.Nonlinea
 
     # call model to (re)calculate
     tmodel = tspan[1]
-    PB.set_tforce!(modeldata.solver_view_all, tmodel)
+    PALEOmodel.set_tforce!(modeldata.solver_view_all, tmodel)
     PALEOmodel.set_statevar!(modeldata.solver_view_all, sol.u)
 
     PB.do_deriv(modeldata.dispatchlists_all)
@@ -486,7 +486,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln,  modeldata
     # call model to (re)calculate 
     for i in eachindex(tsoln)
         tmodel = tsoln[i]     
-        PB.set_tforce!(modeldata.solver_view_all, tmodel)   
+        PALEOmodel.set_tforce!(modeldata.solver_view_all, tmodel)   
         PALEOmodel.set_statevar!(modeldata.solver_view_all, soln[i])
         PB.do_deriv(modeldata.dispatchlists_all)
         PALEOmodel.OutputWriters.add_record!(outputwriter, model, modeldata, tmodel)
