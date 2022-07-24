@@ -328,9 +328,9 @@ function create_solver_view(
          # If requested, change data type eg to remove AD type    
         reallocated_variables = PB.reallocate_variables!(hostdep, modeldata, reallocate_hostdep_eltype)
         if !isempty(reallocated_variables)
-            println(io, "    reallocating host-dependent Variables to eltype $reallocate_hostdep_eltype:")        
+            println(io, "  reallocating host-dependent Variables to eltype $reallocate_hostdep_eltype:")        
             for (v, old_eltype) in reallocated_variables
-                println(io, "        $(fullname(v)) data $old_eltype -> $reallocate_hostdep_eltype")
+                println(io, "    $(PB.fullname(v)) data $old_eltype -> $reallocate_hostdep_eltype")
             end
         end
     end
