@@ -379,7 +379,7 @@ function calcJacobianSparsitySparsityTracing!(
     
     PALEOmodel.set_statevar!(modeldata_ad.solver_view_all, initial_state_ad) # fix up modeldata_ad initial_state, as derivative information missing
     
-    PB.set_tforce!(modeldata_ad.solver_view_all, tjacsparsity)
+    PALEOmodel.set_tforce!(modeldata_ad.solver_view_all, tjacsparsity)
 
     if isnothing(jac_cellranges)
         # Jacobian for whole model
@@ -418,7 +418,7 @@ function calcImplicitSparsitySparsityTracing!(
 
     PALEOmodel.set_statevar!(modeldata_sparsitytracing.solver_view_all, initial_state_ad)
 
-    PB.set_tforce!(modeldata_sparsitytracing.solver_view_all, tsparsity)
+    PALEOmodel.set_tforce!(modeldata_sparsitytracing.solver_view_all, tsparsity)
 
     implicit_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_sparsitytracing, implicit_cellranges)
 
@@ -490,7 +490,7 @@ function directional_forwarddiff!(du, u, v, directional_context, t)
 
     dc = directional_context
 
-    PB.set_tforce!(dc.directional_sv, t)
+    PALEOmodel.set_tforce!(dc.directional_sv, t)
     for i in eachindex(u)
         dc.directional_workspace[i] = ForwardDiff.Dual(u[i], v[i])
     end
