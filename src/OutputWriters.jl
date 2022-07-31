@@ -130,33 +130,36 @@ so the supplied coordinate Variables must have the same dimensionality as `vars`
 """
 function PALEOmodel.get_array(
     output::PALEOmodel.AbstractOutputWriter, varname::AbstractString;
+    coords=nothing,
     allselectargs...
 )  
-    Base.depwarn(
-        "allselectargs... will be deprecated in a future release.  Please use allselectargs::NamedTuple instead",
-        PALEOmodel.get_array
-    )
-    return PALEOmodel.get_array(output, varname, NamedTuple(allselectargs))
+    isempty(allselectargs) ||
+        Base.depwarn(
+            "allselectargs... will be deprecated in a future release.  Please use allselectargs::NamedTuple instead",
+            :get_array,
+        )
+    return PALEOmodel.get_array(output, varname, NamedTuple(allselectargs); coords=coords)
 end
 
 function PALEOmodel.get_array(
-    output::PALEOmodel.AbstractOutputWriter, varname::AbstractString, allselectargs::NamedTuple=NamedTuple();
-    coords::AbstractVector=[],
+    output::PALEOmodel.AbstractOutputWriter, varname::AbstractString, allselectargs::NamedTuple; # allselectargs::NamedTuple=NamedTuple() creates a method ambiguity with deprecated form above
+    coords=nothing,
 )
-    fr = PB.get_field(output, varname)
+    fr = PB.get_field(output, varname)   
 
-    coords_records = [
-        coord_name => (PB.get_field(output, cvn) for cvn in coord_varnames) 
-        for (coord_name, coord_varnames) in coords
-    ]
-
-    if isempty(coords_records)
-        fa = PALEOmodel.get_array(fr, allselectargs)
+    if isnothing(coords)
+        coords_records=nothing
     else
-        fa = PALEOmodel.get_array(fr, allselectargs, coords_records)
-    end
+        PALEOmodel.check_coords_argument(coords) ||
+            error("argument coords should be a Vector of Pairs of \"coord_name\"=>(\"var_name1\", \"var_name2\", ...), eg: [\"z\"=>(\"atm.zmid\", \"atm.zlower\", \"atm.zupper\"), ...]")
 
-    return fa
+        coords_records = [
+            coord_name => Tuple(PB.get_field(output, cvn) for cvn in coord_varnames) 
+            for (coord_name, coord_varnames) in coords
+        ]
+    end        
+
+    return PALEOmodel.get_array(fr, allselectargs; coords=coords_records)
 end
 
 """

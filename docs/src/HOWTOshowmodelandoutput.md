@@ -120,7 +120,7 @@ The output can be plotted using the Julia Plots.jl package, see [Plotting output
 
 ## Spatial or wavelength-dependent output
 
-To analyze spatial or eg wavelength-dependent output (eg time series from a 1D column or 3D general circulation model, or quantities that are a function of wavelength or frequency), [`PALEOmodel.get_array`](@ref) takes additional arguments to take 1D or 2D slices from the spatial, spectral and timeseries data. The [`PALEOmodel.FieldArray`](@ref) returned includes coordinates to plot column (1D) and heatmap (2D) data.
+To analyze spatial or eg wavelength-dependent output (eg time series from a 1D column or 3D general circulation model, or quantities that are a function of wavelength or frequency), [`PALEOmodel.get_array`](@ref) takes an additional `selectargs::NamedTuple` argument to take 1D or 2D slices from the spatial, spectral and timeseries data. The [`PALEOmodel.FieldArray`](@ref) returned includes default coordinates to plot column (1D) and heatmap (2D) data, these can be overridden by supplying the optional `coords` keyword argument.
 
 ### Examples for a column-based model
 
@@ -128,17 +128,27 @@ Visualisation of spatial and wavelength-dependent output from the PALEOdev.jl oz
 
 #### 1D column data
     julia> plot(title="O3 mixing ratio", output, "atm.O3_mr", (tmodel=[0.0, 0.1, 1.0, 10.0, 100.0, 1000.0], column=1),
-                swap_xy=true, xaxis=:log, labelattribute=:filter_records) # plots O3 vs height
+                swap_xy=true, xscale=:log10, labelattribute=:filter_records) # plots O3 vs default height coordinate
 
-Here the `labelattribute=:filter_records` keyword argument is used to generate plot labels from the `:filter_records` FieldArray attribute, which contains the `tmodel` values used to select the timeseries records.  The plot recipe expands
+Here the optional `labelattribute=:filter_records` keyword argument is used to generate plot labels from the `:filter_records` FieldArray attribute, which contains the `tmodel` values used to select the timeseries records.  The plot recipe expands
 the Vector-valued `tmodel` argument to overlay a sequence of plots.
 
 This is equivalent to first creating and then plotting a sequence of `FieldArray` objects:
-
-    julia> O3_mr = PALEOmodel.get_array(run.output, "atm.O3_mr", tmodel=0.0, column=1)
-    julia> plot(title="O3 mixing ratio", O3_mr, swap_xy=true, xaxis=:log, labelattribute=:filter_records)
-    julia> O3_mr = PALEOmodel.get_array(run.output, "atm.O3_mr", tmodel=0.1, column=1)
+    julia> O3_mr = PALEOmodel.get_array(run.output, "atm.O3_mr", (tmodel=0.0, column=1))
+    julia> plot(title="O3 mixing ratio", O3_mr, swap_xy=true, xscale=:log10, labelattribute=:filter_records)
+    julia> O3_mr = PALEOmodel.get_array(run.output, "atm.O3_mr", (tmodel=0.1, column=1))
     julia> plot!(O3_mr, swap_xy=true, labelattribute=:filter_records)
+
+The default height coordinate from the model grid can be replaced using the optional `coords` keyword argument, eg
+    julia> plot(title="O3 mixing ratio", output, "atm.O3_mr", (tmodel=[0.0, 0.1, 1.0, 10.0, 100.0, 1000.0], column=1),
+                coords=["p"=>("atm.pmid", "atm.plower", "atm.pupper")],
+                swap_xy=true, xscale=:log10, yflip=true, yscale=:log10, labelattribute=:filter_records) # plots O3 vs pressure
+
+The current values in the `modeldata` struct can also be plotted using the same syntax, eg
+
+    julia> plot(title="O2, O3 mixing ratios", modeldata, ["atm.O2_mr", "atm.O3_mr"], (column=1,),
+                swap_xy=true, xscale=:log10) # plot current value of O2, O3 vs height
+
 
 #### Wavelength-dependent data
     julia> plot(title="direct transmittance", output, ["atm.direct_trans"], (tmodel=1e12, column=1, cell=[1, 80]),

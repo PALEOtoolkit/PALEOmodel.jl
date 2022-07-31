@@ -116,9 +116,11 @@ end
 
 """
     plot(output::AbstractOutputWriter, vars::Union{AbstractString, Vector{<:AbstractString}} [, selectargs::NamedTuple] [; coords::AbstractVector])
-    heatmap(output::AbstractOutputWriter, vars::Union{AbstractString, Vector{<:AbstractString}} [, selectargs::NamedTuple] [; coords::AbstractVector])
+    heatmap(output::AbstractOutputWriter, var::AbstractString [, selectargs::NamedTuple] [; coords::AbstractVector])
     plot(outputs::Vector{<:AbstractOutputWriter}, vars::Union{AbstractString, Vector{<:AbstractString}} [, selectargs::NamedTuple] [; coords::AbstractVector])
 
+    plot(modeldata::AbstractModelData, vars::Union{AbstractString, Vector{<:AbstractString}} [, selectargs::NamedTuple] [; coords::AbstractVector])
+    heatmap(modeldata::AbstractModelData, var::AbstractString [, selectargs::NamedTuple] [; coords::AbstractVector])
 
 Plot recipe that calls `PB.get_field(output, var)`, and passes on to `plot(fr::FieldRecord, selectargs)`
 (see [`RecipesBase.apply_recipe(::Dict{Symbol, Any}, fr::FieldRecord, selectargs::NamedTuple)`](@ref))
@@ -141,35 +143,86 @@ so the supplied coordinate Variables must have the same dimensionality as `vars`
 """
 RecipesBase.@recipe function f(
     output::AbstractOutputWriter,
-    vars::Union{AbstractString, Vector{<:AbstractString}},
+    vars::Union{AbstractString, AbstractVector{<:AbstractString}},
     selectargs::NamedTuple=NamedTuple();
-    coords::AbstractVector = [],
+    coords=nothing, # NB: PlotRecipes doesn't support type annotation
 )
 
     if isa(vars, AbstractString)
         vars = [vars]
     end
 
-    coords_records = [
-        coord_name => (PB.get_field(output, cvn) for cvn in coord_varnames) 
-        for (coord_name, coord_varnames) in coords
-    ]
+    if isnothing(coords)
+        coords_records=nothing
+    else
+        check_coords_argument(coords) || 
+            error("coords argument should be of form 'coords=[\"z\"=>(\"atm.zmid\", \"atm.zlower\", \"atm.zupper\"), ...]")
+        coords_records = [
+            coord_name => Tuple(PB.get_field(output, cvn) for cvn in coord_varnames) 
+            for (coord_name, coord_varnames) in coords
+        ]
+    end
     delete!(plotattributes, :coords)
             
     for var in vars
         RecipesBase.@series begin
-            varsplit = split(var, ".")
-            if length(varsplit) == 3
-                structfield := Symbol(varsplit[3])
-                varsplit = varsplit[1:2]
+             # if var is of form <domain>.<name>.<structfield>, set :structfield to take a single field from struct-valued Var
+            var, var_structfield = _split_var_structfield(var)
+            if !isnothing(var_structfield)
+                structfield := var_structfield
             end
-            var = join(varsplit, ".")
         
+            # pass through to plot recipe for FieldRecord
             PB.get_field(output, var), selectargs, coords_records
         end
     end
 
     return nothing
+end
+
+RecipesBase.@recipe function f(
+    modeldata::PB.AbstractModelData,
+    vars::Union{AbstractString, AbstractVector{<:AbstractString}},
+    selectargs::NamedTuple=NamedTuple();
+    coords=nothing, # NB: PlotRecipes doesn't support type annotation
+)
+    delete!(plotattributes, :coords)
+            
+    if isa(vars, AbstractString)
+        vars = [vars]
+    end
+
+    # broadcast any Vector-valued argument in selectargs
+    bcastargs = broadcast_dict([Dict{Symbol, Any}(pairs(selectargs))])
+
+    for var in vars        
+        # if var is of form <domain>.<name>.<structfield>, set :structfield to take a single field from struct-valued Var
+        var, var_structfield = _split_var_structfield(var)
+        if !isnothing(var_structfield)
+            structfield := var_structfield
+        end
+        
+        # broadcast selectargs
+        for sa in bcastargs
+            sa_nt = NamedTuple(sa)
+            RecipesBase.@series begin
+                # pass through to plot recipe for FieldArray
+                PALEOmodel.get_array(modeldata, var, sa_nt; coords=coords)
+            end
+        end
+    end
+  
+    return nothing
+end
+
+function _split_var_structfield(var)
+    # if var is of form <domain>.<name>.<structfield>, split off <structfield>
+    varsplit = split(var, ".")
+    if length(varsplit) == 3        
+        return join(varsplit[1:2], "."), Symbol(varsplit[3])
+    else
+        return var, nothing
+    end
 end
 
 """
@@ -182,17 +235,15 @@ adding a `labelprefix` (index in `outputs` Vector) to identify each plot series 
 RecipesBase.@recipe function f(
     outputs::Vector{<:AbstractOutputWriter}, 
     vars::Union{AbstractString, Vector{<:AbstractString}},
-    selectargs::NamedTuple=NamedTuple();
-    coords::AbstractVector=[],
+    selectargs::NamedTuple=NamedTuple()
 )
     for (i, output) in enumerate(outputs)
         RecipesBase.@series begin
             labelprefix --> "$i: "
-            output, vars, selectargs, coords
+            output, vars, selectargs
         end
     end
-    delete!(plotattributes, :coords)
-
+ 
     return nothing
 end
 
@@ -211,11 +262,11 @@ Vector-valued fields in `selectargs` are "broadcasted" (generating a separate pl
 Optional argument `coords_records` can be used to supply plot coordinates from `FieldRecords`.
 Format is a Vector of Pairs of "coord_name"=>(cr1::FieldRecord, cr2::FieldRecord, ...)
 Example:
-    coords=["z"=>(zmid::FieldRecord, zlower::FieldRecord, zupper::FieldRecord)]
+    coords_records=["z"=>(zmid::FieldRecord, zlower::FieldRecord, zupper::FieldRecord)]
 to replace a 1D column default pressure coordinate with a z coordinate.   NB: the coordinates will be generated by applying `selectargs`,
 so the supplied coordinate FieldRecords must have the same dimensionality as `fr`.
 """
-RecipesBase.@recipe function f(fr::FieldRecord, selectargs::NamedTuple, coords_records::AbstractVector=[])
+RecipesBase.@recipe function f(fr::FieldRecord, selectargs::NamedTuple, coords_records=nothing)
 
     # broadcast any Vector-valued argument in selectargs
     bcastargs = broadcast_dict([Dict{Symbol, Any}(pairs(selectargs))])
@@ -223,11 +274,7 @@ RecipesBase.@recipe function f(fr::FieldRecord, selectargs::NamedTuple, coords_r
     for sa in bcastargs
         sa_nt = NamedTuple(sa)
         RecipesBase.@series begin
-            if isempty(coords_records)
-                get_array(fr, sa_nt)
-            else
-                get_array(fr, sa_nt, coords_records)
-            end
+            get_array(fr, sa_nt; coords=coords_records)
         end
     end
 end
