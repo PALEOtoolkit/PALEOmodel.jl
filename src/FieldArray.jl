@@ -89,8 +89,8 @@ function get_array(
 
     values, dims = PB.Grids.get_region(f.mesh, f.values; selectargs...)
 
-    if !isempty(selectargs)
-        attributes = isnothing(attributes) ? Dict{Symbol, Any}() : copy(attributes)
+    if !isnothing(attributes) && !isempty(selectargs)
+        attributes = copy(attributes)
         attributes[:filter_region] = selectargs
     end
 
@@ -125,8 +125,8 @@ function get_array(
         end
     end
 
-    if !isempty(selectargs)
-        attributes = isnothing(attributes) ? Dict{Symbol, Any}() : copy(attributes)
+    if !isnothing(attributes) && !isempty(selectargs)
+        attributes = copy(attributes)
         attributes[:filter_region] = selectargs
     end
 

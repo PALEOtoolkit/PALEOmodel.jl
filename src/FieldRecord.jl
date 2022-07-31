@@ -260,6 +260,9 @@ function _get_array(
 
         # get FieldArray from first Field record and use this to figure out array shapes etc
         far = get_array(fr[first(ridx)], selectargs_region)
+        # TODO - Julia bug ? length(far.dims) returning wrong value, apparently triggered by this line
+        #        attributes = isnothing(attributes) ? Dict{Symbol, Any}() : copy(attributes)
+        # in get_array
         if length(ridx) > 1
             # add additional (last) dimension for records
             favalues = Array{eltype(far.values), length(far.dims)+1}(undef, size(far.values)..., length(ridx))
