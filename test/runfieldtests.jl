@@ -174,14 +174,14 @@ end
         @test fr[1].values == fill(42.0, 5, 2)
 
         # FieldArray from Field
-        fa = PALEOmodel.get_array(f, column=1)
+        fa = PALEOmodel.get_array(f, (column=1,))
         @test length(fa.dims) == 2
         @test fa.dims[1].name == "z"
         @test fa.dims[2].name == "test"
         @test size(fa.values) == (5, 2)
         @test fa.values == fill(43.0, 5, 2)
 
-        fa = PALEOmodel.get_array(f, column=1, cell=1)
+        fa = PALEOmodel.get_array(f, (column=1, cell=1))
         @test length(fa.dims) == 1
         @test fa.dims[1].name == "test"
         @test size(fa.values) == (2, )
@@ -189,7 +189,7 @@ end
 
 
         # FieldArray from FieldRecord
-        fra = PALEOmodel.get_array(fr, column=1)
+        fra = PALEOmodel.get_array(fr, (column=1))
         @test length(fra.dims) == 3
         @test fra.dims[1].name == "z"
         @test fra.dims[2].name == "test"
@@ -198,7 +198,7 @@ end
         @test fra.values[:, :, 1] == fill(42.0, 5, 2)
         @test fra.values[:, :, 2] == fill(43.0, 5, 2)
 
-        fra = PALEOmodel.get_array(fr, column=1, cell=1)
+        fra = PALEOmodel.get_array(fr, (column=1, cell=1))
         @test length(fra.dims) == 2
         @test fra.dims[1].name == "test"
         @test fra.dims[2].name == "records"

@@ -75,9 +75,11 @@ are passed to `PB.Grids.get_region`.
 `attributes` (if present) are added to `FieldArray`
 """
 function get_array(
-    f::PB.Field{D, PB.ScalarSpace, V, N, M};
+    f::PB.Field{D, PB.ScalarSpace, V, N, M}, selectargs::NamedTuple=NamedTuple();
     attributes=nothing,
 ) where {D, V, N, M}
+    isempty(selectargs) ||
+        error("get_array on Field f defined on ScalarSpace with non-empty selectargs=$selectargs")
 
     return FieldArray(default_fieldarray_name(attributes), f.values, f.data_dims, attributes)
 end
