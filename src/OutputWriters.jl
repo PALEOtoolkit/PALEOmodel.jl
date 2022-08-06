@@ -307,7 +307,7 @@ end
 function OutputMemoryDomain(
     name::AbstractString, data::DataFrames.DataFrame;
     coords_record::Symbol=:tmodel, coords_record_units::AbstractString="yr",
-    metadata::Dict{String, Dict{Symbol, Any}}=Dict(coords_record=>Dict{Symbol, Any}(:units=>coords_record_units)),    
+    metadata::Dict{String, Dict{Symbol, Any}}=Dict(String(coords_record)=>Dict{Symbol, Any}(:units=>coords_record_units)),    
 )
     # create minimal metadata for scalar Variables
     for vname in DataFrames.names(data)
