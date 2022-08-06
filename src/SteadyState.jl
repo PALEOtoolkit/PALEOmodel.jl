@@ -292,7 +292,7 @@ function nlsolveF_PTC(
     if jac_ad==:NoJacobian
         @info "steadystate: no Jacobian"
         # Define the function we want to solve 
-        ssFJ! = FJacPTC(modelode, nothing, Ref(tss), Ref(deltat), nothing, nothing, previous_u, du_worksp)
+        ssFJ! = FJacPTC(modelode, nothing, tss, deltat, nothing, nothing, previous_u, du_worksp)
         df = NLsolve.OnceDifferentiable(ssFJ!, similar(initial_state), similar(initial_state)) 
     else       
         @info "steadystate:  using Jacobian $jac_ad"
