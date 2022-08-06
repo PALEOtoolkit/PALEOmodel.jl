@@ -1,4 +1,7 @@
 
+using Test
+using Logging
+
 @testset "All tests" begin
 
 include("runfieldtests.jl")
