@@ -1,0 +1,54 @@
+model1:
+    parameters:
+        CIsotope: IsotopeLinear # ScalarData
+
+    domains:
+        global:
+            
+            reactions:
+                reservoir_A:
+                    class: ReactionReservoirScalar
+                
+                    parameters:
+                        field_data: external%CIsotope
+
+                    variable_links:
+                        R*: A*
+                    variable_attributes:
+                        R:norm_value:           3.193e17
+                        R:initial_value:        3.193e18
+                        R:initial_delta: 2.0  # per mil
+
+                reservoir_O:
+                    class: ReactionReservoirScalar
+                   
+                    variable_links:
+                        R*: O*
+                    variable_attributes:
+                        R:norm_value:           3.7e18
+                        R:initial_value:        3.7e19
+
+        ocean:
+            
+            reactions:
+                grid:
+                    class: ReactionUnstructuredVectorGrid
+                    parameters:
+                        ncells: 10
+
+                const_volume:
+                    class: ReactionConst
+                    parameters:
+                        constnames: ["volume"]
+                    variable_attributes:                       
+                        volume:initial_value:        10.0
+
+
+                reservoir_tracer:
+                    class: ReactionReservoirTotal
+                    variable_links:
+                        R*: T*
+                    variable_attributes:
+                        R:norm_value:           10.0  # concentration m-3                  
+                        R:initial_value:        1.0  # concentration m-3
+

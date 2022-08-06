@@ -1,7 +1,7 @@
 name = "PALEOmodel"
 uuid = "bf7b4fbe-ccb1-42c5-83c2-e6e9378b660c"
 authors = ["Stuart Daines <stuart.daines@gmail.com>"]
-version = "0.15.6"
+version = "0.15.7"
 
 [deps]
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
