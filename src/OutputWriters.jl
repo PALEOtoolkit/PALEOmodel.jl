@@ -49,16 +49,18 @@ Implementations should define methods for:
 PALEOmodel.AbstractOutputWriter
 
 """
-    initialize!(output::PALEOmodel.AbstractOutputWriter, model, modeldata, nrecords [;rec_coord=:tmodel])
+    initialize!(
+        output::PALEOmodel.AbstractOutputWriter, model, modeldata, nrecords 
+        [;coords_record=:tmodel] [coords_record_units="yr"]
+    )
 
 Initialize from a PALEOboxes::Model, reserving memory for an assumed output dataset of `nrecords`.
 
-The default for `rec_coord` is `:tmodel`, for a sequence of records following the time evolution
+The default for `coords_record` is `:tmodel`, for a sequence of records following the time evolution
 of the model.
 """
 function initialize!(
-    output::PALEOmodel.AbstractOutputWriter, model::PB.Model, modeldata::PB.ModelData, nrecords;
-    rec_coord::Symbol=:tmodel
+    output::PALEOmodel.AbstractOutputWriter, model::PB.Model, modeldata::PB.ModelData, nrecords
 )
 end
 
@@ -222,8 +224,8 @@ Base.length(output::OutputMemoryDomain) = output._nrecs
 
 "create from a PALEOboxes::Domain"
 function OutputMemoryDomain(
-    dom::PB.Domain, modeldata::PB.ModelData, nrecords; 
-    coords_record=:tmodel, coords_units="yr"
+    dom::PB.Domain, modeldata::PB.ModelData, nrecords::Integer; 
+    coords_record::Symbol=:tmodel, coords_record_units::AbstractString="yr"
 )
   
     odom =  OutputMemoryDomain(
@@ -271,7 +273,7 @@ function OutputMemoryDomain(
     odom.metadata[String(coords_record)] = Dict(
         :var_name=>String(coords_record), :domain_name=>dom.name,
         :vfunction=>PB.VF_Undefined, :description=>"output record coordinate",
-        :field_data=>PB.ScalarData, :space=>PB.ScalarSpace, :data_dims=>(), :units=>coords_units,
+        :field_data=>PB.ScalarData, :space=>PB.ScalarSpace, :data_dims=>(), :units=>coords_record_units,
     )
 
     # add variables
@@ -304,8 +306,8 @@ end
 "create from a DataFrames DataFrame containing scalar data"
 function OutputMemoryDomain(
     name::AbstractString, data::DataFrames.DataFrame;
-    metadata::Dict{String, Dict{Symbol, Any}}=Dict("tmodel"=>Dict{Symbol, Any}(:units=>"yr")),
-    coords_record=:tmodel,
+    coords_record::Symbol=:tmodel, coords_record_units::AbstractString="yr",
+    metadata::Dict{String, Dict{Symbol, Any}}=Dict(coords_record=>Dict{Symbol, Any}(:units=>coords_record_units)),    
 )
     # create minimal metadata for scalar Variables
     for vname in DataFrames.names(data)
@@ -413,7 +415,9 @@ function PB.get_field(odom::OutputMemoryDomain, varname)
     varname in DataFrames.names(df) || 
         error("Variable $varname not found in output (no column '$varname' in Dataframe output.domains[\"$(odom.name)\"].data)")
 
-    vdata = df[!, Symbol(varname)]
+    use_all_records = DataFrames.nrow(df) == odom._nrecs
+    # vdata = df[!, Symbol(varname)]
+    vdata = use_all_records ? df[!, Symbol(varname)] : df[1:odom._nrecs, Symbol(varname)]
 
     attributes = get(odom.metadata, varname, nothing)
 
@@ -438,11 +442,14 @@ function PB.get_field(odom::OutputMemoryDomain, varname)
         coords_record=[
             PB.FixedCoord(
                 String(odom.coords_record),
-                df[!, odom.coords_record],
+                # df[!, odom.coords_record],
+                use_all_records ? df[!, odom.coords_record] : df[1:odom._nrecs, odom.coords_record],
                 odom.metadata[String(odom.coords_record)]
             ),
         ]
     )
+
+    # @Infiltrator.infiltrate
 
     return fr
 end
@@ -656,7 +663,8 @@ end
 
 function initialize!(
     output::OutputMemory, model::PB.Model, modeldata::PB.ModelData, nrecords;
-    rec_coord::Symbol=:tmodel
+    rec_coord::Symbol=:tmodel, # deprecated
+    coords_record::Symbol=rec_coord, coords_record_units::AbstractString="yr",    
 )
 
     # Create Dict of DataFrames with output
@@ -664,7 +672,8 @@ function initialize!(
     for dom in model.domains
         output.domains[dom.name] = OutputMemoryDomain(
             dom, modeldata, nrecords,
-            coords_record=rec_coord,
+            coords_record=coords_record,
+            coords_record_units=coords_record_units,
         )
     end
   

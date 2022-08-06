@@ -1,11 +1,18 @@
 """
-    FieldRecord{D <: AbstractData, S <: AbstractSpace, ...}
+    FieldRecord{D <: AbstractData, S <: AbstractSpace, V, N, M, R}
+    FieldRecord(
+        f::PB.Field{D, S, V, N, M}, attributes; 
+        coords_record, 
+        sizehint::Union{Nothing, Int}=nothing
+    ) -> fr
 
-A series of records each containing a `PALEOboxes.Field`.
+A series of `records::R` each containing the `values` from a `PALEOboxes.Field{D, S, N, V, M}`.
+
+A `coords_record` may be attached to provide a coordinate (eg model time) corresponding to `records`.
 
 # Implementation
-Fields with array values are stored in `records` as a Vector of arrays.
-Fields with single values (`field_single_element` true) are stored as a Vector of `eltype(Field.values)`. 
+Fields with array `values` are stored in `records` as a Vector of arrays.
+Fields with single `values` (`field_single_element` true) are stored as a Vector of `eltype(Field.values)`. 
 """
 struct FieldRecord{D <: PB.AbstractData, S <: PB.AbstractSpace, V, N, M, R}
     records::Vector{R}
@@ -44,7 +51,7 @@ field_single_element(::Type{PB.Field{D, S, V, N, M}}) where {D, S, V, N, M} = fi
 field_single_element(::Type{FR}) where {FR <: FieldRecord} = field_single_element(eltype(FR))
 field_single_element(f::T) where {T} = field_single_element(T)
 
-"create empty FieldRecord"
+
 function FieldRecord(
     f::PB.Field{D, S, V, N, M}, attributes;
     coords_record, 
@@ -63,9 +70,9 @@ function FieldRecord(
     return FieldRecord{D, S, V, N, M, eltype(records)}(records, f.data_dims, f.mesh, attributes, coords_record)
 end
 
-"create a new FieldRecord, containing supplied `existing_values` data arrays"
+"create a new FieldRecord, containing supplied `existing_values::Vector` data arrays"
 function wrap_fieldrecord(
-    existing_values, 
+    existing_values::Vector, 
     field_data::Type, 
     data_dims::NTuple{N, PB.NamedDimension},
     data_type::Union{DataType, Missing},
@@ -78,10 +85,10 @@ function wrap_fieldrecord(
     #    existing_values, field_data, data_dims, data_type, space, spatial_size(space, mesh), 
     # )
     if field_single_element(field_data, N, space, M)
-        # assume existing_values is a Vector, with element a Field value, to be stored in Field as a length-1 Vector
-        V = Array{eltype(existing_values), 1}
+        # assume existing_values is a Vector, with each element to be stored in Field values::V as a length 1 Vector
+        V = Vector{eltype(existing_values)}
     else
-        # assume existing_values is a Vector of Field values
+        # assume existing_values is a Vector of Field values::V
         V = eltype(existing_values)
     end
 
