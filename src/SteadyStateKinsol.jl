@@ -16,7 +16,9 @@ using SparseDiffTools
 """
     steadystate_ptc(run, initial_state, modeldata, tspan, deltat_initial; 
         [,deltat_fac=2.0] [,tss_output] [,outputwriter] [,createkwargs] [,solvekwargs]
-        [,jac_cellranges] [, use_directional_ad] [, directional_ad_eltypestomap] [,verbose] [,  BLAS_num_threads] )
+        [, use_jac_preconditioner] [,jac_cellranges] [, use_directional_ad] [, directional_ad_eltypestomap]
+        [,verbose] [,  BLAS_num_threads]
+    )
 
 Find steady-state solution and write to `outputwriter`, using naive pseudo-transient-continuation
 with first order implicit Euler pseudo-timesteps and [`PALEOmodel.Kinsol`](@ref) as the non-linear solver.
@@ -35,7 +37,8 @@ Solver [`PALEOmodel.Kinsol`](@ref) options are set by arguments `createkwargs`
 (passed through to [`PALEOmodel.Kinsol.kin_create`](@ref))
 and `solvekwargs` (passed through to [`PALEOmodel.Kinsol.kin_solve`](@ref)).
 
-Preconditioner (Jacobian) calculation can be modified by `jac_cellranges`, to specify a operatorIDs 
+If `use_jac_ad_preconditioner` is `true`, the AD Jacobian is used as preconditioner.
+The preconditioner (Jacobian) calculation can be modified by `jac_cellranges`, to specify a operatorIDs 
 so use only a subset of Reactions in order to  calculate an approximate Jacobian to use as the preconditioner.
 
 If `use_directional_ad` is `true`, the Jacobian-vector product will be calculated using automatic differentiation (instead of 
@@ -47,9 +50,11 @@ function steadystate_ptc(
     run, initial_state, modeldata, tspan, deltat_initial::Float64; 
     deltat_fac=2.0,
     tss_output=[],
+    ptc_iter_max=1000,
     outputwriter=run.output,
     createkwargs::NamedTuple=NamedTuple{}(), 
-    solvekwargs::NamedTuple=NamedTuple{}(),    
+    solvekwargs::NamedTuple=NamedTuple{}(),
+    use_jac_ad_preconditioner=true,
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,   
     use_directional_ad=false,
@@ -69,19 +74,23 @@ function steadystate_ptc(
     iszero(PALEOmodel.num_total(sv))                 || error("implicit total variables not supported")
     iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
 
-    
-    # Define preconditioner setup function
-    @info "steadystate:  using Jacobian :ForwardDiffSparse as preconditioner"
-    jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
-        :ForwardDiffSparse, run.model, initial_state, modeldata, tss,
-        request_adchunksize=request_adchunksize,
-        jac_cellranges=jac_cellranges
-    )    
+    if use_jac_ad_preconditioner
+        # Define preconditioner setup function
+        @info "steadystate:  using Jacobian :ForwardDiffSparse as preconditioner"
+        jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
+            :ForwardDiffSparse, run.model, initial_state, modeldata, tss,
+            request_adchunksize=request_adchunksize,
+            jac_cellranges=jac_cellranges
+        )    
 
-    (transfer_data_ad, transfer_data) = PALEOmodel.JacobianAD.jac_transfer_variables(
-        run.model, jac.modeldata, modeldata
-    )
-    
+        (transfer_data_ad, transfer_data) = PALEOmodel.JacobianAD.jac_transfer_variables(
+            run.model, jac.modeldata, modeldata
+        )
+    else
+        jac, jac_prototype = nothing, []
+        transfer_data_ad, transfer_data = [], []
+    end
+
     # workspace arrays
     current_state   = copy(initial_state)
     deriv_worksp    = similar(initial_state)
@@ -207,8 +216,8 @@ function steadystate_ptc(
     kin = PALEOmodel.Kinsol.kin_create(
         ssf!, initial_state, 
         linear_solver = :FGMRES, 
-        psetupfun=psetup,
-        psolvefun=psolve,
+        psetupfun=use_jac_ad_preconditioner ? psetup : nothing,
+        psolvefun=use_jac_ad_preconditioner ? psolve : nothing,
         userdata=userdata,
         jvfun=use_directional_ad ? directional_jv : nothing;
         createkwargs...
@@ -228,7 +237,7 @@ function steadystate_ptc(
     ptc_iter = 1
     sol = nothing
  
-    @time while userdata.tmodel[] < tss_max
+    @time while userdata.tmodel[] < tss_max && ptc_iter <= ptc_iter_max
         # limit timestep if necessary, to get to next output
         # keep track of the deltat we could have used
         deltat_full = userdata.deltat[]  
@@ -302,6 +311,9 @@ function steadystate_ptc(
         
         ptc_iter += 1
     end
+
+    ptc_iter <= ptc_iter_max ||
+        @warn "    max ptc iters $ptc_iter_max exceeded"
 
     # always write the last record even if it wasn't explicitly requested
     if tsoln[end] != userdata.tmodel[]
