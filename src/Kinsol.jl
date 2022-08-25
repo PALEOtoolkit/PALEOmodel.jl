@@ -81,7 +81,7 @@ function kinjactimesvec(
     u::Sundials.N_Vector,
     new_u::Ptr{Cint},
     userfun::UserFunctionAndData
-) 
+)
     retval = userfun.jv(
         convert(Vector, v),
         convert(Vector, Jv), 
@@ -130,7 +130,7 @@ function kin_create(
     # use the user_data field to pass a function
     #   see: https://github.com/JuliaLang/julia/issues/2554
     userfun = UserFunctionAndData(f, psetupfun, psolvefun, jvfun, userdata)
-    push!(handles, userfun) # prevent userfun from being garbage collected (required for julia 1.8)
+    # push!(handles, userfun) # TODO prevent userfun from being garbage collected ?
     function getkinsolfun(userfun::T) where {T}
         @cfunction(kinsolfun, Cint, (Sundials.N_Vector, Sundials.N_Vector, Ref{T}))
     end
