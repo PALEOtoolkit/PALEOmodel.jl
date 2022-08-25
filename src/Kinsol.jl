@@ -11,6 +11,8 @@ module Kinsol
 
 import Sundials
 
+# import Infiltrator
+
 ###########################################################
 # Internals: Julia <-> C wrapper functions
 ###########################################################
@@ -25,21 +27,14 @@ mutable struct UserFunctionAndData{F1, F2, F3, F4}
     data::Any
 end
 
-UserFunctionAndData(func, data) = UserFunctionAndData(func, nothing, nothing, nothing, data)
-UserFunctionAndData(func) = func
-UserFunctionAndData(func, psetup::Nothing, psolve::Nothing, jv::Nothing, data::Nothing) = func
-
 # Julia adaptor function with C types, passed in to Kinsol C code as a callback
 # wraps C types and forwards to the Julia user function
-function kinsolfun(y::Sundials.N_Vector, fy::Sundials.N_Vector, userfun::UserFunctionAndData)
-    # @Infiltrator.infiltrate
+function kinsolfun(
+    y::Sundials.N_Vector,
+    fy::Sundials.N_Vector, 
+    userfun::UserFunctionAndData
+)
     userfun.func(convert(Vector, fy), convert(Vector, y), userfun.data)
-    return Sundials.KIN_SUCCESS
-end
-
-function kinsolfun(y::Sundials.N_Vector, fy::Sundials.N_Vector, userfun)
-    # @Infiltrator.infiltrate
-    userfun(convert(Vector, fy), convert(Vector, y))
     return Sundials.KIN_SUCCESS
 end
 
@@ -69,7 +64,6 @@ function kinprecsolve(
     v::Sundials.N_Vector,
     userfun::UserFunctionAndData
 )
-
     retval = userfun.psolve(
         convert(Vector, u),
         convert(Vector, uscale), 
@@ -87,7 +81,7 @@ function kinjactimesvec(
     u::Sundials.N_Vector,
     new_u::Ptr{Cint},
     userfun::UserFunctionAndData
-)    
+) 
     retval = userfun.jv(
         convert(Vector, v),
         convert(Vector, Jv), 
@@ -136,6 +130,7 @@ function kin_create(
     # use the user_data field to pass a function
     #   see: https://github.com/JuliaLang/julia/issues/2554
     userfun = UserFunctionAndData(f, psetupfun, psolvefun, jvfun, userdata)
+    push!(handles, userfun) # prevent userfun from being garbage collected (required for julia 1.8)
     function getkinsolfun(userfun::T) where {T}
         @cfunction(kinsolfun, Cint, (Sundials.N_Vector, Sundials.N_Vector, Ref{T}))
     end
@@ -220,9 +215,7 @@ function kin_solve(
     flag = Sundials.@checkflag Sundials.KINSetNoInitSetup(kmem, noInitSetup) true
 
     ## Solve problem    
-    # @Infiltrator.infiltrate
     returnflag = Sundials.KINSol(kmem, y, strategy, y_scale, f_scale)
-
 
     ## Get stats
     nfevals = [0]

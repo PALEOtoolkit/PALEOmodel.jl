@@ -34,6 +34,7 @@ function integrateEuler(
     outputwriter=run.output,
     report_interval=1000
 )
+    PB.check_modeldata(run.model, modeldata)
 
     timesteppers = [
         [(
@@ -95,6 +96,8 @@ function integrateSplitEuler(
 )
 
     @info "integrateSplitEuler: Δt_outer=$Δt_outer (yr) n_inner=$n_inner"
+
+    PB.check_modeldata(run.model, modeldata)
 
     solver_view_outer = PALEOmodel.create_solver_view(run.model, modeldata, cellranges_outer)
     @info "solver_view_outer: $(solver_view_outer)"    
@@ -159,11 +162,12 @@ function integrateEulerthreads(
     outputwriter=run.output,
     report_interval=1000,
 )
+    PB.check_modeldata(run.model, modeldata)
 
     nt = Threads.nthreads()
     nt == 1 || modeldata.threadsafe || 
         error("integrateEulerthreads: Threads.nthreads() = $nt but modeldata is not thread safe "*
-            "(check initialize!(run::Run, ...))")
+            "(check initialize!(run.model, ...))")
 
     lc = length(cellranges)
     lc == nt ||
@@ -235,7 +239,8 @@ function integrateSplitEulerthreads(
     outputwriter=run.output,
     report_interval=1000,
 )
-    
+    PB.check_modeldata(run.model, modeldata)
+
     nt = Threads.nthreads()
     nt == 1 || modeldata.threadsafe || 
         error("integrateEulerthreads: Threads.nthreads() = $nt but modeldata is not thread safe (check initialize!(run::Run, ...))")
@@ -338,6 +343,7 @@ function create_timestep_Euler_ctxt(
     n_substep=1,
     verbose=false,
 )
+    PB.check_modeldata(model, modeldata)
 
     num_constraints = PALEOmodel.num_algebraic_constraints(solver_view)
     iszero(num_constraints) || error("DAE problem with $num_constraints algebraic constraints")
@@ -368,6 +374,7 @@ function integrateFixed(
     outputwriter=run.output,
     report_interval=1000
 )
+    PB.check_modeldata(run.model, modeldata)
 
     nevals = 0
 
@@ -447,6 +454,7 @@ function integrateFixedthreads(
     outputwriter=run.output,
     report_interval=1000
 )
+    PB.check_modeldata(run.model, modeldata)
 
     nevals = 0
        

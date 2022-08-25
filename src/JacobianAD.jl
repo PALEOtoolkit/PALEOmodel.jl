@@ -53,7 +53,9 @@ function jac_config_ode(
     jac_cellranges=modeldata.cellranges_all,
     init_logger=Logging.NullLogger(),
 )
-    @info "jac_config_ode: jac_ad=$jac_ad"  
+    @info "jac_config_ode: jac_ad=$jac_ad"
+
+    PB.check_modeldata(model, modeldata)
 
     iszero(PALEOmodel.num_total(modeldata.solver_view_all)) ||
         throw(ArgumentError("model contains implicit variables, solve as a DAE"))
@@ -158,7 +160,9 @@ function jac_config_dae(
     implicit_cellranges=modeldata.cellranges_all,
     init_logger=Logging.NullLogger(),
 )
-    @info "jac_config_dae: jac_ad=$jac_ad"  
+    @info "jac_config_dae: jac_ad=$jac_ad"
+
+    PB.check_modeldata(model, modeldata)
     
     # generate arrays with ODE layout for model Variables
     state_sms_vars_data = similar(PALEOmodel.get_statevar_sms(modeldata.solver_view_all))

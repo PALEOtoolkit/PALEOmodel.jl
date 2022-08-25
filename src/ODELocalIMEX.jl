@@ -59,6 +59,8 @@ function integrateLocalIMEXEuler(
 
     @info "integrateLocalIMEXEuler: Δt_outer=$Δt_outer (yr)"
 
+    PB.check_modeldata(run.model, modeldata)
+
     solver_view_outer = PALEOmodel.create_solver_view(run.model, modeldata, cellranges_outer)
     @info "solver_view_outer: $(solver_view_outer)"    
     
@@ -106,6 +108,8 @@ function timestep_LocalImplicit(
     deriv_only=false,
     integrator_barrier=nothing,
 )
+    PB.check_modeldata(model, modeldata)
+
     length(cellranges) == 1 || error("timestep_LocalImplicit only single cellrange supported")
     cellrange = cellranges[1]
 
@@ -180,6 +184,7 @@ function create_timestep_LocalImplicit_ctxt(
     niter_max,
     Lnorm_inf_max
 )
+    PB.check_modeldata(model, modeldata)
 
     lictxt = PALEOmodel.ODELocalIMEX.getLocalImplicitContext(
         model, modeldata, cellrange, exclude_var_nameroots,
@@ -196,6 +201,7 @@ function getLocalImplicitContext(
     request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     init_logger=Logging.NullLogger(),
 )
+    PB.check_modeldata(model, modeldata)
 
     # create SolverViews for first cell, to work out how many dof we need
     cellrange_cell = PB.CellRange(cellrange.domain, cellrange.operatorID, first(cellrange.indices) )

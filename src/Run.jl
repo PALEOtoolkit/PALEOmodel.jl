@@ -26,11 +26,15 @@ function Base.show(io::IO, ::MIME"text/plain", run::Run)
 end
 
 
-initialize!(run::Run; kwargs...) = initialize!(run.model; kwargs...)
+function initialize!(run::Run; kwargs...)
+    Base.depwarn("call to deprecated initialize!(run::Run; ...), please update your code to use initialize!(run.model; ...)", :initialize!, force=true)
+
+    return initialize!(run.model; kwargs...)
+end
 
 """
     initialize!(model::PB.Model; kwargs...) -> (initial_state::Vector, modeldata::PB.ModelData)
-    initialize!(run::Run; kwargs...) -> (initial_state::Vector, modeldata::PB.ModelData)
+    [deprecated] initialize!(run::Run; kwargs...) -> (initial_state::Vector, modeldata::PB.ModelData)
 
 Initialize `model` or `run.model` and return:
 - an `initial_state` Vector

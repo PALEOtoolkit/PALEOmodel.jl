@@ -52,6 +52,7 @@ function ODEfunction(
     jac_ad_t_sparsity=nothing,    
     init_logger=Logging.NullLogger(),
 )
+    PB.check_modeldata(model, modeldata)
 
     # check for implicit total variables
     PALEOmodel.num_total(modeldata.solver_view_all) == 0 ||
@@ -101,8 +102,9 @@ function DAEfunction(
     jac_ad_t_sparsity=nothing,    
     init_logger=Logging.NullLogger(),
 )
-
     @info "DAEfunction:  using Jacobian $jac_ad"
+
+    PB.check_modeldata(model, modeldata)
     
     jac, jac_prototype, odeimplicit = PALEOmodel.JacobianAD.jac_config_dae(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity,
