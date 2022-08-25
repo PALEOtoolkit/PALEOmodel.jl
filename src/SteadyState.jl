@@ -53,6 +53,7 @@ function steadystate(
     use_norm::Bool=false,
     BLAS_num_threads=1,
 )
+    PB.check_modeldata(run.model, modeldata)
 
     LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
     @info "steadystate:  using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads"
@@ -189,6 +190,8 @@ function steadystate_ptc(
     verbose=false,
     BLAS_num_threads=1
 )
+    PB.check_modeldata(run.model, modeldata)
+
     !use_norm || ArgumentError("use_norm=true not supported")
 
     nlsolveF = nlsolveF_PTC(
@@ -272,6 +275,8 @@ function nlsolveF_PTC(
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,
 )
+    PB.check_modeldata(model, modeldata)
+
     sv = modeldata.solver_view_all
 
     # We only support explicit ODE-like configurations (no DAE constraints or implicit variables)

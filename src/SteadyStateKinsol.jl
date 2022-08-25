@@ -62,6 +62,8 @@ function steadystate_ptc(
     verbose=false,
     BLAS_num_threads=1
 )
+    PB.check_modeldata(run.model, modeldata)
+
     # start, end times
     tss, tss_max = tspan
 
