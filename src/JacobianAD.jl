@@ -353,7 +353,13 @@ function jac_transfer_variables(model, modeldata_ad, modeldata)
     l_d_ad = length(transfer_data_arrays_ad) 
     l_d == l_d_ad || error("jac_transfer_variables: length mismatch transfer to ad variable components=$l_d_ad, from variable components=$l_d")
 
-    @info "jac_transfer_variables transfer $l_d Variable components"
+    b = IOBuffer()
+    println(b, "jac_transfer_variables transfer $l_d Variable components:")
+    for v in transfer_vars
+        println(b, "    $(PB.fullname(v))")
+    end
+    @info String(take!(b))
+
     return (
         [d for d in transfer_data_arrays_ad], # rebuild to get a typed Vector
         [d for d in transfer_data_arrays]     # rebuild to get a typed Vector
