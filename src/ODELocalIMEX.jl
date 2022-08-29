@@ -5,6 +5,7 @@ import Infiltrator
 import PALEOboxes as PB
 
 import PALEOmodel
+import ..NonLinearNewton
 
 import Logging
 import LinearAlgebra
@@ -112,55 +113,54 @@ function timestep_LocalImplicit(
 
     length(cellranges) == 1 || error("timestep_LocalImplicit only single cellrange supported")
     cellrange = cellranges[1]
-
-    PALEOmodel.set_tforce!(modeldata.solver_view_all, touter + Δt)
+    
     if deriv_only
-        # for reporting output fluxes etc 
-        for cell_idx in cellrange.indices
-            cell_context = lictxt.cell_context[cell_idx]                  
-            PB.do_deriv(cell_context.dispatchlists, Δt)
+        # for reporting output fluxes etc
+        PALEOmodel.set_tforce!(modeldata.solver_view_all, touter + Δt)
+        # NB: cell_number corresponds to 1:number_of_cells, not the actual cell indices in cellrange.indices
+        for cell_number in 1:length(cellrange.indices)
+            PB.do_deriv(lictxt.cell_residual.dispatchlists[cell_number], Δt)
         end
     else
         # implicit timestep
-        
-        PALEOmodel.set_tforce!(lictxt.modeldata_ad.solver_view_all, touter + Δt)
-
-        S_previous = lictxt.cell_S_previous # workspace
 
         niter_max = 0
         niter_total = 0
         (Lnorm_inf_init, Lnorm_2_init) = (0.0, 0.0)
         (Lnorm_inf, Lnorm_2) = (0.0, 0.0)
 
-        for cell_idx in cellrange.indices
-            cell_context = lictxt.cell_context[cell_idx]
+        cell_residual = lictxt.cell_residual
+        cell_jacobian = lictxt.cell_jacobian
 
-            # statevar at previous timestep
-            PALEOmodel.get_statevar!(S_previous, cell_context.solverview)
-
-            (Lnorm_inf_cell, Lnorm_2_cell) = calc_residual(S_previous, lictxt, cell_idx, Δt)
-            (Lnorm_inf_init_cell, Lnorm_2_init_cell) = (Lnorm_inf_cell, Lnorm_2_cell)
+        # NB: cell_number corresponds to 1:number_of_cells, not the actual cell indices in cellrange.indices
+        for cell_number in 1:length(cellrange.indices)
             
-            niter = 0
-            while (isnan(Lnorm_inf_cell) || Lnorm_inf_cell > lictxt.Lnorm_inf_max) && niter < lictxt.niter_max
-                local_newton_update(lictxt.Valn_solve, lictxt, cell_idx, touter, Δt)          
-                (Lnorm_inf_cell, Lnorm_2_cell) = calc_residual(S_previous, lictxt, cell_idx, Δt)
-                niter += 1
-            end
+            lastS, lastSnorm = get_S(cell_residual, cell_number)
+
+            Lnorm_inf_init = max(LinearAlgebra.norm(lastSnorm, Inf), Lnorm_inf_init)
+            Lnorm_2_init += LinearAlgebra.norm(lastSnorm)^2
+           
+            set_cell!(cell_residual, cell_number, lastS, touter+Δt, Δt)
+            set_cell!(cell_jacobian, cell_number, lastS, touter+Δt, Δt)
+
+            (_, Lnorm_2_cell, Lnorm_inf_cell, niter) = NonLinearNewton.solve(
+                cell_residual,
+                cell_jacobian, 
+                lastSnorm;
+                reltol=lictxt.Lnorm_inf_max,
+                maxiters=lictxt.niter_max,
+                verbose = 0,
+            )
             
             niter >= lictxt.niter_max && 
-                @warn "  tmodel $touter cell_idx $cell_idx implicit niter_max $(lictxt.niter_max) exceeded "*
+                @warn "  tmodel $touter cellindex $(cell_residual.cellindices[cell_number]) implicit niter_max $(lictxt.niter_max) exceeded "*
                     "(Lnorm_inf, Lnorm_2) ($Lnorm_inf_init_cell, $Lnorm_2_init_cell) -> ($Lnorm_inf_cell, $Lnorm_2_cell)"
 
-            # @info "    timestep_LocalImplicit: niter $niter (Lnorm_inf, Lnorm_2) "*
-            #    "($Lnorm_inf_init_cell, $Lnorm_2_init_cell) -> ($Lnorm_inf_cell, $Lnorm_2_cell)"
             # update global stats
             niter_total += niter
             niter_max = max(niter, niter_max)
             Lnorm_inf = max(Lnorm_inf_cell, Lnorm_inf)
-            Lnorm_inf_init = max(Lnorm_inf_init_cell, Lnorm_inf_init)
-            Lnorm_2 += Lnorm_2_cell^2
-            Lnorm_2_init += Lnorm_2_init_cell^2
+            Lnorm_2 += Lnorm_2_cell^2          
         end
 
         Lnorm_2, Lnorm_2_init = sqrt(Lnorm_2), sqrt(Lnorm_2_init)
@@ -178,26 +178,11 @@ function timestep_LocalImplicit(
 end
 
 function create_timestep_LocalImplicit_ctxt(
-    model, modeldata;                                   
-    cellrange,
+    model, modeldata;
+    cellrange, 
     exclude_var_nameroots,
     niter_max,
-    Lnorm_inf_max
-)
-    PB.check_modeldata(model, modeldata)
-
-    lictxt = PALEOmodel.ODELocalIMEX.getLocalImplicitContext(
-        model, modeldata, cellrange, exclude_var_nameroots,
-    )
-
-    Valn_solve = Val(lictxt.n_solve)    
-   
-    return merge(lictxt, (; Valn_solve, niter_max, Lnorm_inf_max))
-end
-
-
-function getLocalImplicitContext(
-    model, modeldata, cellrange, exclude_var_nameroots,
+    Lnorm_inf_max,
     request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     init_logger=Logging.NullLogger(),
 )
@@ -247,148 +232,191 @@ function getLocalImplicitContext(
     _, modeldata_ad = Logging.with_logger(init_logger) do
         PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize})
     end
-
-    # allocate one cell buffers for Newton update workspace
-    J = Matrix{eltype(modeldata)}(undef, n_solve, n_solve); fill!(J, NaN)
-    cell_mat = similar(J); fill!(cell_mat, NaN)
-    u_worksp = Vector{eltype(modeldata)}(undef, n_solve); fill!(u_worksp, NaN)
-    cell_residual = similar(u_worksp); fill!(cell_residual, NaN)
-    cell_S_previous = similar(u_worksp); fill!(cell_S_previous, NaN)
-
-    # Jacobian workspace (for one cell)
-    jacconf = ForwardDiff.JacobianConfig(nothing, u_worksp, u_worksp, ForwardDiff.Chunk{chunksize}())
  
     # temporarily replace modeldata with norm so can read back per-cell norms
     statevar_all_current = PALEOmodel.get_statevar(modeldata.solver_view_all)
     PALEOmodel.uncopy_norm!(modeldata.solver_view_all)
-    # create per-cell solver_view, dispatchlists, jac
-    cell_context = []
+ 
+    # create per-cell solver_view, dispatchlists
+    cellindices = Int64[]
+    solverviews, solverviews_ad = [], []
+    dispatchlists, dispatchlists_ad = [], []
+    statevar_norms = []
     for i in cellrange.indices
+        push!(cellindices, i)
         # (ab)use that fact that Julia allows iteration over scalar i (to optimise out loop over cellrange.indices)
         cellrange = PB.CellRange(cellrange.domain, cellrange.operatorID, i) 
 
-        solverview = PALEOmodel.create_solver_view(
+        sv = PALEOmodel.create_solver_view(
             model, modeldata, [cellrange], 
             exclude_var_nameroots=exclude_var_nameroots,
             indices_from_cellranges=true,
             hostdep_all=false,
         )
-        PALEOmodel.copy_norm!(solverview)
-        statevar_norm = PALEOmodel.get_statevar_norm(solverview)
-        statevar_sms_norm = PALEOmodel.get_statevar_sms_norm(solverview)
+        push!(solverviews, sv)
 
-        solverview_ad = PALEOmodel.create_solver_view(
+        PALEOmodel.copy_norm!(sv)
+        statevar_norm = PALEOmodel.get_statevar_norm(sv)
+        push!(statevar_norms, statevar_norm)        
+        
+        dl = PB.create_dispatch_methodlists(model, modeldata, [cellrange])
+        push!(dispatchlists, dl)
+
+        sv_ad = PALEOmodel.create_solver_view(
             model, modeldata_ad, [cellrange], 
             exclude_var_nameroots=exclude_var_nameroots,
             indices_from_cellranges=true,
             hostdep_all=false,
         )
-        PALEOmodel.copy_norm!(solverview_ad)
+        push!(solverviews_ad, sv_ad)
+       
+        dl_ad = PB.create_dispatch_methodlists(model, modeldata_ad, [cellrange])
 
-        dispatchlists = PB.create_dispatch_methodlists(model, modeldata, [cellrange])
-        dispatchlists_ad = PB.create_dispatch_methodlists(model, modeldata_ad, [cellrange])
+        push!(dispatchlists_ad, dl_ad)
 
-        jac_cell = PALEOmodel.SolverFunctions.JacODEForwardDiffDense(
-            modeldata_ad, 
-            solverview_ad,
-            dispatchlists_ad,
-            u_worksp, 
-            jacconf
-        )
-
-        push!(cell_context, (;cellrange, dispatchlists, solverview, statevar_norm, statevar_sms_norm, jac_cell))
     end
-    cell_context = [c for c in cell_context] # narrow type
-   
+       
     # replace modeldata statevar (temporarily was set to norm)
     PALEOmodel.set_statevar!(modeldata.solver_view_all, statevar_all_current)
 
-    return (;n_solve, modeldata_ad, J, cell_mat, u_worksp, cell_residual, cell_S_previous, cell_context, va_excluded, va_sms_excluded)
+    cell_residual = CellResidual(
+        n_solve,
+        eltype(modeldata),
+        cellindices,
+        [sv for sv in solverviews],  # narrow type
+        [dl for dl in dispatchlists], # narrow type
+        [svn for svn in statevar_norms], # narrow type
+    )
+
+    cell_jacobian = CellJacobian(
+        CellResidual(
+            n_solve,
+            eltype(modeldata_ad),
+            cellindices,
+            [sv for sv in solverviews_ad],  # narrow type
+            [dl for dl in dispatchlists_ad], # narrow type
+            [svn for svn in statevar_norms], # narrow type
+        )
+    )
+
+    return (;niter_max, Lnorm_inf_max, n_solve, cell_residual, cell_jacobian, va_excluded, va_sms_excluded)
 end
 
+"""
+    CellResidual(Ncomps, wseltype, cellindices, solverviews, dispatchlists, statevar_norms)
 
-"Given state variable S_previous (statevar at the previous timestep), 
-and a current S_next estimate in modeldata,
-calculate the normalized residual = (S_next - S_previous - deltat*(dS/dt)|S_next)/S_norm
-"
-function calc_residual(S_previous, lictxt, cell_idx, deltat)
-    cell_context = lictxt.cell_context[cell_idx]
+Callable struct to calculate residual for an implicit timestep for a set of cells, one cell at a time.
 
-    # get subset of state vector given by solver_view_cell
-    S_next = lictxt.u_worksp # temporary workspace
-    PALEOmodel.get_statevar!(S_next, cell_context.solverview)
+# Arguments
+- `Ncomps`: number of variable components
+- `wseltype`: element type of variable (eg `Float64`)
+- `cellindices`: cell indices used (for diagnostic output only)
+- `solverviews`: Vector of per-cell PALEOmodel.SolverView
+- `dispatchlists`: Vector of per-cell dispatchlists
+- `statevar_norms`: Vector of per-cell variable component norms
 
+# Usage
+To calculate the residual for one cell:
+- Call `set_cell!(cr::CellResidual, celln, lastS, t, deltat)` to set cell number `celln`, state variables `lastS` at previous timestep, 
+  time `t` to step to and timestep `deltat`.
+  NB: `celln` corresponds to 1:length(cellindices) ie `solverviews`, `dispatchlists`, `statevar_norms` are stored as 1-based Vectors
+- Call `cr(newS)` to calculate the residual for new state variables `newS`.
+"""
+mutable struct CellResidual{Ncomps, T, SV, DL}
+    cellindices::Vector{Int64} # cell indices 
+    solverviews::Vector{SV}  # vector, 1:length(cellindices)
+    dispatchlists::Vector{DL}    # vector, 1:length(cellindices)
+    
+    statevar_norms::Vector{Vector{Float64}}
+
+    celln::Int64
+    lastSnorm::Vector{T}
+    deltat::Float64
+    
+    newS::Vector{T}   # workspace
+    residual::Vector{T}  # workspace
+    dSnormdt::Vector{T}   # workspace
+end
+
+function CellResidual(Ncomps, wseltype, cellindices, solverviews, dispatchlists, statevar_norms)
+    return CellResidual{Ncomps, wseltype, eltype(solverviews), eltype(dispatchlists)}(
+        cellindices,
+        solverviews,
+        dispatchlists,
+        statevar_norms,
+        -1,
+        Vector{wseltype}(undef, Ncomps),
+        NaN,
+        Vector{wseltype}(undef, Ncomps),
+        Vector{wseltype}(undef, Ncomps),
+        Vector{wseltype}(undef, Ncomps),
+    )
+end
+
+ncomps(cr::CellResidual{Ncomps, WS, SV, DL}) where {Ncomps, WS, SV, DL} = Ncomps
+
+function get_S(cr::CellResidual, celln)
+    S, Snorm = cr.newS, cr.dSnormdt # use workspace arrays
+    PALEOmodel.get_statevar!(S, cr.solverviews[celln])
+    Snorm .= S ./ cr.statevar_norms[celln]
+    return StaticArrays.SVector{ncomps(cr)}(S), StaticArrays.SVector{ncomps(cr)}(Snorm)
+end
+
+function set_cell!(cr::CellResidual, celln, lastS, t, deltat)
+    
+    cr.celln = celln
+    statevar_norm = cr.statevar_norms[cr.celln]
+    cr.lastSnorm .= lastS ./ statevar_norm
+
+    PALEOmodel.set_tforce!(cr.solverviews[cr.celln], t)
+    cr.deltat = deltat
+end
+
+function (cr::CellResidual)(newSnorm)
+    statevar_norm = cr.statevar_norms[cr.celln]
+    solverview = cr.solverviews[cr.celln]
+    dispatchlists = cr.dispatchlists[cr.celln]
+
+    cr.newS .= newSnorm .*statevar_norm
+    PALEOmodel.set_statevar!(solverview, cr.newS)
     # derivative at S_next for our subset of Variables and indices given by cellrange
     # NB: this will update all Variables including excluded Variables, not just those needed for nonlinear_solve
-    PB.do_deriv(cell_context.dispatchlists, deltat)
-    # get derivative
-    dSdt_next = lictxt.cell_residual # temporary workspace
-    PALEOmodel.get_statevar_sms!(dSdt_next, cell_context.solverview)
+    PB.do_deriv(dispatchlists, cr.deltat)    
 
-    # calculate residual, accumulating norms as we go
-    Linfnorm = 0.0
-    L2norm_sq = 0.0
-    @inbounds for i in eachindex(lictxt.cell_residual)
-        lictxt.cell_residual[i] = 
-            ((S_next[i] - S_previous[i] - deltat*dSdt_next[i])
-            / cell_context.statevar_norm[i])
-        rnormed = lictxt.cell_residual[i]
-        Linfnorm = max(Linfnorm, abs(rnormed))
-        L2norm_sq += rnormed^2        
+    # get derivative and normalize
+    PALEOmodel.get_statevar_sms!(cr.dSnormdt, solverview)
+    cr.dSnormdt .= cr.dSnormdt ./ statevar_norm
+
+    # calculate residual
+    @inbounds for i in eachindex(cr.residual)
+        cr.residual[i] = newSnorm[i] - cr.lastSnorm[i] - cr.deltat*cr.dSnormdt[i]
     end
-    L2norm = sqrt(L2norm_sq)
 
-    return (Linfnorm, L2norm)
+    return StaticArrays.SVector{ncomps(cr)}(cr.residual)
 end
 
-"Given the current residual in lictxt.residual,
-and a current S_next estimate in modeldata,
-do a Newton iteration to generate an improved estimate for S_next,
-and save it back to modeldata.
+mutable struct CellJacobian{CR}
+    cellresidual::CR
+end
 
-   S_next <-- S_next - inv(I - deltat*J(S_next))*residual
-"
-function local_newton_update(::Val{Ncomps}, lictxt, cell_idx, t, deltat) where Ncomps
+set_cell!(cj::CellJacobian, celln, lastS, t, deltat) = set_cell!(cj.cellresidual, celln, lastS, t, deltat)
 
-    Ncomps == length(lictxt.cell_residual) || error("Ncomps != length(cell_residual)")
+@inline function (cj::CellJacobian)(newSnorm)
+    # return ForwardDiff.jacobian(
+    #     cj.cellresidual,
+    #     newSnorm,
+    #     ForwardDiff.JacobianConfig(nothing, newSnorm),
+    #     Val(false)
+    # )
 
-    cell_context = lictxt.cell_context[cell_idx]
+    # TODO workaround for a limitation of ForwardDiff - can't specify a jacobian with no 'tag' when using StaticArrays
+    return vector_mode_jacobian_notag(cj.cellresidual, newSnorm)
+end
 
-    # calculate Jacobian at current value of S_next 
-    S_next = lictxt.u_worksp
-    PALEOmodel.get_statevar!(S_next, cell_context.solverview)
-    cell_context.jac_cell(lictxt.J, S_next, nothing, t)
-   
-    # workspace to gather per-cell values
-    cell_residual       = lictxt.cell_residual
-    cell_var_norms      = cell_context.statevar_norm
-    cell_var_sms_norms  = cell_context.statevar_sms_norm
-    cell_mat            = lictxt.cell_mat
-   
-    # Newton update for this cell  
-     
-    # form cell_mat = I - deltat*(normalized Jacobian(S_next))
-    fill!(cell_mat, 0.0)
-    @inbounds for ij in 1:Ncomps
-        cell_mat[ij, ij] = 1.0
-    end
-    # gather and normalize Jacobian
-    @inbounds for j in 1:Ncomps, i in 1:Ncomps
-        cell_mat[i, j] += -deltat * lictxt.J[i, j] / cell_var_sms_norms[i] * cell_var_norms[j]
-    end
-    
-    # solve linear system, using StaticArrays for speed
-    minusdeltaS = StaticArrays.SMatrix{Ncomps, Ncomps}(cell_mat) \ StaticArrays.SVector{Ncomps}(cell_residual)
-    
-    # calculate change in S_next estimate
-    @inbounds for n in 1:Ncomps
-        lictxt.u_worksp[n] = -(minusdeltaS[n] * cell_var_sms_norms[n])
-    end
-   
-    # update S_next estimate
-    PALEOmodel.add_statevar!(cell_context.solverview, 1.0, lictxt.u_worksp)
-
-    return nothing
+@inline function vector_mode_jacobian_notag(f, x::StaticArrays.StaticArray)
+    # T = typeof(Tag(f, eltype(x)))
+    T = Nothing
+    return ForwardDiff.extract_jacobian(T, ForwardDiff.static_dual_eval(T, f, x), x)
 end
 
 end # module

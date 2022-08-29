@@ -25,6 +25,8 @@ include("JacobianAD.jl")
 
 include("ThreadBarriers.jl")
 
+include("NonLinearNewton.jl")
+
 include("ODE.jl")
 
 include("ODEfixed.jl")
