@@ -1,7 +1,7 @@
 name = "PALEOmodel"
 uuid = "bf7b4fbe-ccb1-42c5-83c2-e6e9378b660c"
 authors = ["Stuart Daines <stuart.daines@gmail.com>"]
-version = "0.15.9"
+version = "0.15.10"
 
 [deps]
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
@@ -35,7 +35,7 @@ ForwardDiff = "0.10"
 Infiltrator = "1.0"
 JLD2 = "0.4"
 NLsolve = "4.5"
-PALEOboxes = "0.20.2"
+PALEOboxes = "0.20.2, 0.21"
 RecipesBase = "1.2"
 Requires = "1.0"
 Revise = "3.1"
