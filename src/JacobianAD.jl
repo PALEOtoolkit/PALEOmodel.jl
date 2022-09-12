@@ -319,7 +319,7 @@ end
 ####################################################################
 
 """
-    jac_transfer_variables(model, modeldata_ad, modeldata) -> (transfer_data_arrays_ad, transfer_data_arrays)
+    jac_transfer_variables(model, modeldata_ad, modeldata; extra_vars=[]) -> (transfer_data_arrays_ad, transfer_data_arrays)
 
 Build Vectors of data arrays that need to be copied from `modeldata` to `modeldata_ad` before calculating Jacobian.
 (looks for Variables with :transfer_jacobian attribute set).  Only needed if the Jacobian calculation is optimised
@@ -333,11 +333,12 @@ The copy needed is then:
         d_ad .= d
     end
 """
-function jac_transfer_variables(model, modeldata_ad, modeldata)
+function jac_transfer_variables(model, modeldata_ad, modeldata; extra_vars=[])
 
-    # get list of Variables with attribute :transfer_jacobian = true
     transfer_vars = []
+    # get list of Variables with attribute :transfer_jacobian = true    
     for dom in model.domains
+        append!(transfer_vars, PB.get_variables(dom, v -> v.name in extra_vars))
         append!(transfer_vars, PB.get_variables(dom, v -> PB.get_attribute(v, :transfer_jacobian, false)))
     end
 

@@ -497,6 +497,21 @@ function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln,  modeldata
     return nothing
 end
 
+function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln, modelode, modeldata)
+
+    PALEOmodel.OutputWriters.initialize!(outputwriter, model, modeldata, length(tsoln))
+
+    # call model to (re)calculate
+    du = similar(first(soln)) # not used
+    for i in eachindex(tsoln)
+        tmodel = tsoln[i]     
+        modelode(du, soln[i], nothing, tmodel)
+        PALEOmodel.OutputWriters.add_record!(outputwriter, model, modeldata, tmodel)
+    end
+   
+    return nothing
+end
+
 """
     print_sol_stats(sol::SciMLBase.ODESolution)
     print_sol_stats(sol::SciMLBase.DAESolution)

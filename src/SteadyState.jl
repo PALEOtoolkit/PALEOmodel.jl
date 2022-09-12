@@ -372,12 +372,11 @@ function solve_ptc(
     tss = ssFJ!.t
     deltat = ssFJ!.delta_t
     previous_state = ssFJ!.previous_u
-    modeldata = ssFJ!.modelode.modeldata
- 
+  
     #################################################
     # outer loop over pseudo-timesteps
     #################################################
-    
+
     # current pseudo-timestep
     tss = tss_initial
     deltat = deltat_initial
@@ -478,7 +477,9 @@ function solve_ptc(
         push!(soln, copy(sol.zero))
     end
 
-    PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modeldata)
+    modelode = ssFJ!.modelode
+    modeldata = modelode.modeldata
+    PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modelode, modeldata)
     return nothing    
 end
 

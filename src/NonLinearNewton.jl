@@ -23,6 +23,7 @@ function solve(
     jac, 
     u0::AbstractVector;
     reltol=1e-5,
+    miniters::Integer=0,
     maxiters::Integer=100,
     verbose::Integer=0,
 )
@@ -32,7 +33,8 @@ function solve(
     Lnorm_2 = LinearAlgebra.norm(residual, 2)
     Lnorm_inf = LinearAlgebra.norm(residual, Inf)
     iters = 0
-    while Lnorm_inf > reltol && iters < maxiters
+    verbose >= 1 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf u $u"
+    while (Lnorm_inf > reltol || iters < miniters) && iters < maxiters
         jacobian = jac(u)
         u = u - jacobian \ residual
         iters += 1
@@ -46,7 +48,7 @@ function solve(
 
     iters < maxiters || @warn "maxiters $maxiters reached"
 
-    verbose >= 1 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf"
+    verbose >= 1 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf u $u"
 
     return (u, Lnorm_2, Lnorm_inf, iters)
 end
