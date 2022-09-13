@@ -12,7 +12,7 @@ import NLsolve
 import ..SolverFunctions
 import ..ODE
 import ..JacobianAD
-
+import ..SplitDAE
 
 
 ##############################################################
@@ -167,11 +167,14 @@ to the rate of convergence, so requires some trial-and-error to set an appropiat
 - `tss_output=[]`: Vector of model times at which to save output (empty Vector to save all output timesteps)
 - `outputwriter=run.output`: output destination
 - `solvekwargs=NamedTuple()`: arguments to pass through to NLsolve
+- `max_iter=1000`: maximum number of PTC iterations
 - `jac_ad=:NoJacobian`: AD Jacobian to use
 - `request_adchunksize=10`: ForwardDiff chunk size to request.
 - `jac_cellranges=modeldata.cellranges_all`: CellRanges to use for Jacobian calculation
-  (eg to restrict to an approximate Jacobian)
+  (eg to restrict to an approximate Jacobian by using a cellrange with a non-default `operatorID`: in this case, Variables that are not calculated
+  but needed for the Jacobian should set the `transfer_jacobian` attribute so that they will be copied)
 - `enforce_noneg=false`: fail pseudo-timesteps that generate negative values for state variables.
+- `sol_min=-Inf`: if `sol_min != -Inf`, replace solution with `max.(solution, sol_min)` after each iteration.
 - `use_norm=false`: not supported (must be false)
 - `verbose=false`: true for detailed output
 - `BLAS_num_threads=1`: restrict threads used by Julia BLAS (likely irrelevant if using sparse Jacobian?)
@@ -182,10 +185,12 @@ function steadystate_ptc(
     tss_output=[],
     outputwriter=run.output,
     solvekwargs::NamedTuple=NamedTuple{}(),
+    max_iter=1000,
     jac_ad=:NoJacobian,
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,
     enforce_noneg=false,
+    sol_min=-Inf,
     use_norm::Bool=false,
     verbose=false,
     BLAS_num_threads=1
@@ -205,10 +210,12 @@ function steadystate_ptc(
     solve_ptc(
         run, initial_state, nlsolveF, tspan, deltat_initial::Float64;
         deltat_fac=deltat_fac,
+        max_iter=max_iter,
         tss_output=tss_output,
         outputwriter=outputwriter,
         solvekwargs=solvekwargs,
         enforce_noneg=enforce_noneg,
+        sol_min=sol_min,
         verbose=verbose,
         BLAS_num_threads=BLAS_num_threads,
     )
@@ -259,69 +266,75 @@ function steadystate_ptcForwardDiff(
 end
 
 """
-    nlsolveF_PTC(
-        model, initial_state, modeldata;
-        jac_ad=:NoJacobian,
-        request_adchunksize=10,
-        jac_cellranges=modeldata.cellranges_all,
-    ) -> (ssFJ!, df::NLsolve.OnceDifferentiable)
+    steadystate_ptc_splitdae(run, initial_state, modeldata, tspan, deltat_initial; kwargs...) 
+    
+As [`steadystate_ptc`](@ref), with an inner Newton solve for per-cell algebraic constraints
+(eg quasi-steady-state reaction intermediates).
 
-Create function object to pass to NLsolve, with function + optional Jacobian
+# Keywords (in common with [`steadystate_ptc`](@ref))
+- `deltat_fac`
+- `tss_output`
+- `outputwriter`
+- `solvekwargs`
+- `max_iter`
+- `request_adchunksize`
+- `jac_cellranges`
+- `enforce_noneg`
+- `sol_min`
+- `verbose`
+
+# Keywords (additional to [`steadystate_ptc`](@ref))
+- `operatorID_inner=3`: operatorID for Reactions to run for inner solve (typically all reservoirs and chemical reactions)
+- `transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"]`: Variables not calculated by `operatorID_inner` that need to be copied for 
+  inner solve (additional to those with `transfer_jacobian` set).
+- `inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60)`: keywords for inner 
+  `NonlinearNewton.solve` solver.
 """
-function nlsolveF_PTC(
-    model, initial_state, modeldata;
-    jac_ad=:NoJacobian,
-    tss_jac_sparsity=nothing,
+function steadystate_ptc_splitdae(
+    run, initial_state, modeldata, tspan, deltat_initial::Float64;
+    deltat_fac=2.0,
+    tss_output=[],
+    outputwriter=run.output,
+    solvekwargs::NamedTuple=NamedTuple{}(),
+    max_iter=1000,
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,
+    enforce_noneg=false,
+    sol_min=-Inf,
+    verbose=false,
+    operatorID_inner=3,
+    transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"], 
+    inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
+    BLAS_num_threads=1
 )
-    PB.check_modeldata(model, modeldata)
+    PB.check_modeldata(run.model, modeldata)
 
-    sv = modeldata.solver_view_all
+    ms, initial_state_outer, jacouter_prototype = SplitDAE.split_dae(
+        run.model, initial_state, modeldata; 
+        jac_cellranges=jac_cellranges,
+        request_adchunksize=request_adchunksize,
+        operatorID_inner=operatorID_inner,
+        transfer_inner_vars=transfer_inner_vars,
+        tss_jac_sparsity=tspan[1], 
+        inner_kwargs=inner_kwargs,
+    )
 
-    # We only support explicit ODE-like configurations (no DAE constraints or implicit variables)
-    iszero(PALEOmodel.num_total(sv))                 || error("implicit total variables not supported")
-    iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+    nlsolveF = nlsolveF_SplitPTC(ms, initial_state_outer, jacouter_prototype)
 
-    # previous_u is state at previous timestep
-    previous_u = similar(initial_state)
-    # workspace arrays 
-    du_worksp    = similar(initial_state)
+    solve_ptc(
+        run, initial_state_outer, nlsolveF, tspan, deltat_initial;
+        deltat_fac=deltat_fac,
+        max_iter=max_iter,
+        tss_output=tss_output,
+        outputwriter=outputwriter,
+        solvekwargs=solvekwargs,
+        enforce_noneg=enforce_noneg,
+        sol_min=sol_min,
+        verbose=verbose,
+        BLAS_num_threads=BLAS_num_threads,
+    )
 
-    # current time and deltat (Refs are passed into function objects, and then updated each timestep)
-    tss = Ref(NaN)
-    deltat = Ref(NaN)
-
-    modelode = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
-
-    if jac_ad==:NoJacobian
-        @info "steadystate: no Jacobian"
-        # Define the function we want to solve 
-        ssFJ! = FJacPTC(modelode, nothing, tss, deltat, nothing, nothing, previous_u, du_worksp)
-        df = NLsolve.OnceDifferentiable(ssFJ!, similar(initial_state), similar(initial_state)) 
-    else       
-        @info "steadystate:  using Jacobian $jac_ad"
-        jacode, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
-            jac_ad, model, initial_state, modeldata, tss_jac_sparsity,
-            request_adchunksize=request_adchunksize,
-            jac_cellranges=jac_cellranges
-        )    
-
-        transfer_data_ad, transfer_data = PALEOmodel.JacobianAD.jac_transfer_variables(
-            model,
-            jacode.modeldata,
-            modeldata
-        )
-       
-        ssFJ! = FJacPTC(modelode, jacode, tss, deltat, transfer_data_ad, transfer_data, previous_u, du_worksp)
- 
-        # Define the function + Jacobian we want to solve
-        !isnothing(jac_prototype) || error("Jacobian is not sparse")
-        # function + sparse Jacobian with sparsity pattern defined by jac_prototype
-        df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state), similar(initial_state), copy(jac_prototype))         
-    end
-
-    return (ssFJ!, df)
+    return nothing    
 end
 
 """
@@ -333,9 +346,11 @@ function solve_ptc(
     run, initial_state, nlsolveF, tspan, deltat_initial::Float64;
     deltat_fac=2.0,
     tss_output=[],
+    max_iter=1000,
     outputwriter=run.output,
     solvekwargs::NamedTuple=NamedTuple{}(),
     enforce_noneg=false,
+    sol_min=-Inf,
     verbose=false,
     BLAS_num_threads=1
 )
@@ -372,12 +387,11 @@ function solve_ptc(
     tss = ssFJ!.t
     deltat = ssFJ!.delta_t
     previous_state = ssFJ!.previous_u
-    modeldata = ssFJ!.modelode.modeldata
- 
+  
     #################################################
     # outer loop over pseudo-timesteps
     #################################################
-    
+
     # current pseudo-timestep
     tss = tss_initial
     deltat = deltat_initial
@@ -385,7 +399,7 @@ function solve_ptc(
         
     ptc_iter = 1
     sol = nothing
-    @time while tss < tss_max
+    @time while tss < tss_max && ptc_iter <= max_iter
         deltat_full = deltat  # keep track of the deltat we could have used
         deltat = min(deltat, tss_max - tss) # limit last timestep to get to tss_max
         if iout < length(tss_output)
@@ -437,6 +451,9 @@ function solve_ptc(
             if isa(e, LinearAlgebra.SingularException)
                 @warn "LinearAlgebra.SingularException"
                 sol_ok = false # will force timestep reduction and retry
+            elseif isa(e, ErrorException)
+                @warn "ErrorException: $(e.msg)"
+                sol_ok = false # will force timestep reduction and retry
             else
                 throw(e) # rethrow and fail
             end
@@ -451,7 +468,11 @@ function solve_ptc(
                 # we weren't using the full timestep as an output was requested, so go back to full
                 deltat = deltat_full
             end
-            previous_state .= sol.zero
+            if sol_min == -Inf
+                previous_state .= sol.zero
+            else
+                previous_state .= max.(sol.zero, sol_min)
+            end
             # write output record, if required
             if isempty(tss_output) ||                       # all records requested, or ...
                 (iout <= length(tss_output) &&                  # (not yet done last requested record
@@ -471,6 +492,7 @@ function solve_ptc(
         ptc_iter += 1
     end
 
+    ptc_iter <= max_iter || @warn("     max iterations $max_iter exceeded")
     # always write the last record even if it wasn't explicitly requested
     if tsoln[end] != tss
         @info "    writing output record at tmodel = $(tss)"
@@ -478,7 +500,9 @@ function solve_ptc(
         push!(soln, copy(sol.zero))
     end
 
-    PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modeldata)
+    modelode = ssFJ!.modelode
+    modeldata = modelode.modeldata
+    PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modelode, modeldata)
     return nothing    
 end
 
@@ -559,6 +583,176 @@ function (jn::FJacPTC)(F, J::Union{SparseArrays.SparseMatrixCSC, Nothing}, u)
     end
 
     return nothing
+end
+
+"""
+    nlsolveF_PTC(
+        model, initial_state, modeldata;
+        jac_ad=:NoJacobian,
+        request_adchunksize=10,
+        jac_cellranges=modeldata.cellranges_all,
+    ) -> (ssFJ!, df::NLsolve.OnceDifferentiable)
+
+Create function object to pass to NLsolve, with function + optional Jacobian
+"""
+function nlsolveF_PTC(
+    model, initial_state, modeldata;
+    jac_ad=:NoJacobian,
+    tss_jac_sparsity=nothing,
+    request_adchunksize=10,
+    jac_cellranges=modeldata.cellranges_all,
+)
+    PB.check_modeldata(model, modeldata)
+
+    sv = modeldata.solver_view_all
+
+    # We only support explicit ODE-like configurations (no DAE constraints or implicit variables)
+    iszero(PALEOmodel.num_total(sv))                 || error("implicit total variables not supported")
+    iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+
+    # previous_u is state at previous timestep
+    previous_u = similar(initial_state)
+    # workspace arrays 
+    du_worksp    = similar(initial_state)
+
+    # current time and deltat (Refs are passed into function objects, and then updated each timestep)
+    tss = Ref(NaN)
+    deltat = Ref(NaN)
+
+    modelode = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
+
+    if jac_ad==:NoJacobian
+        @info "steadystate: no Jacobian"
+        # Define the function we want to solve 
+        ssFJ! = FJacPTC(modelode, nothing, tss, deltat, nothing, nothing, previous_u, du_worksp)
+        df = NLsolve.OnceDifferentiable(ssFJ!, similar(initial_state), similar(initial_state)) 
+    else       
+        @info "steadystate:  using Jacobian $jac_ad"
+        jacode, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
+            jac_ad, model, initial_state, modeldata, tss_jac_sparsity,
+            request_adchunksize=request_adchunksize,
+            jac_cellranges=jac_cellranges
+        )    
+
+        transfer_data_ad, transfer_data = PALEOmodel.JacobianAD.jac_transfer_variables(
+            model,
+            jacode.modeldata,
+            modeldata
+        )
+       
+        ssFJ! = FJacPTC(modelode, jacode, tss, deltat, transfer_data_ad, transfer_data, previous_u, du_worksp)
+ 
+        # Define the function + Jacobian we want to solve
+        !isnothing(jac_prototype) || error("Jacobian is not sparse")
+        # function + sparse Jacobian with sparsity pattern defined by jac_prototype
+        df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state), similar(initial_state), copy(jac_prototype))         
+    end
+
+    return (ssFJ!, df)
+end
+
+
+"""
+    FJacSplitPTC
+
+Function object to calculate residual for a first-order Euler implicit timestep and adapt to NLsolve interface
+
+Given:
+- ODE time derivative `du(t)/dt` supplied at construction time by function object `modelode(du, u, p, t)`
+- ODE Jacobian `d(du(t)/dt)/du` supplied at construction time by function  object `jacode(J, u, p, t)`
+- `t`, `delta_t`, `previous_u` set by `set_step!` before each function call.
+
+Calculates `F(u)` and `J(u)` (Jacobian of `F`), where `F(u)` is the residual for a timestep `delta_t` to time `t`
+from state `previous_u`:
+- `F(u) = (u(t) - previous_u + delta_t * du(t)/dt)`
+- `J(u) = I - deltat * d(du(t)/dt)/du`
+"""
+struct FJacSplitPTC{M, J, W}
+    modelode::M
+    jacode::J
+    t::Ref{Float64}
+    delta_t::Ref{Float64}
+    previous_u::W
+    du_worksp::W
+end
+
+"""
+    set_step!(fjp::FJacSplitPTC, t, deltat, previous_u)
+
+Set time to step to `t`, `delta_t` of this step, and `previous_u` (value of state vector at previous time step `t - delta_t`).
+"""
+function set_step!(fjp::FJacSplitPTC, t, deltat, previous_u)
+    fjp.t[] = t
+    fjp.delta_t[] = deltat
+    fjp.previous_u .= previous_u
+
+    return nothing
+end
+
+# F only
+function (jn::FJacSplitPTC)(F, u)
+    jn.modelode(jn.du_worksp, u, nothing, jn.t[])
+
+    F .=  (u .- jn.previous_u - jn.delta_t[].*jn.du_worksp)
+
+    # @Infiltrator.infiltrate
+
+    return nothing
+end
+
+# Jacobian only (just discard F)
+function (jn::FJacSplitPTC)(J::SparseArrays.SparseMatrixCSC, u)
+    jn(nothing, J, u)
+
+    # @Infiltrator.infiltrate
+
+    return nothing
+end
+
+# F and J
+function (jn::FJacSplitPTC)(F, J::SparseArrays.SparseMatrixCSC, u)
+    
+    jn.jacode(jn.du_worksp, J, u, nothing, jn.t[])
+
+    if !isnothing(F)
+        F .=  (u .- jn.previous_u - jn.delta_t[].*jn.du_worksp)
+    end
+
+    # @Infiltrator.infiltrate
+    # convert J  = I - deltat * odeJac  
+    for j in 1:size(J)[2]
+        # idx is index in SparseMatrixCSC compressed storage, i is row index
+        for idx in J.colptr[j]:(J.colptr[j+1]-1)
+            i = J.rowval[idx]
+
+            J.nzval[idx] = -jn.delta_t[]*J.nzval[idx]                
+
+            if i == j
+                J.nzval[idx] += 1.0
+            end                
+        end
+    end
+
+    return nothing
+end
+
+function nlsolveF_SplitPTC(ms::SplitDAE.ModelSplitDAE, initial_state_outer, jacouter_prototype)
+
+    # ODE function and Jacobian for 'outer' Variables, with inner Newton solve
+    modelode = SplitDAE.ModelODEOuter(ms)
+    jacode = SplitDAE.ModelJacOuter(ms, modelode)
+
+    tss = Ref(NaN)
+    deltat = Ref(NaN)
+    previous_u = similar(initial_state_outer)
+    du_worksp = similar(initial_state_outer)
+ 
+    ssFJ! = FJacSplitPTC(modelode, jacode, tss, deltat, previous_u, du_worksp)
+        
+    # function + sparse Jacobian with sparsity pattern defined by jac_prototype
+    df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state_outer), similar(initial_state_outer), copy(jacouter_prototype))         
+
+    return (ssFJ!, df)
 end
 
 end # module

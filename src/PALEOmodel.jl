@@ -35,6 +35,8 @@ include("ODELocalIMEX.jl")
 
 include("Kinsol.jl")
 
+include("SplitDAE.jl")
+
 include("SteadyState.jl")
 
 include("SteadyStateKinsol.jl")

@@ -39,6 +39,32 @@ print_sol_stats
 calc_output_sol!
 ```
 
+## Steady-state solvers (Julia [`NLsolve`](https://github.com/JuliaNLSolvers/NLsolve.jl) based)
+```@meta
+CurrentModule = PALEOmodel.SteadyState
+```
+```@docs
+steadystate
+steadystate_ptc
+steadystate_ptc_splitdae
+```
+
+## Steady-state solvers (Sundials Kinsol based):
+```@meta
+CurrentModule = PALEOmodel.SteadyStateKinsol
+```
+```@docs
+steadystate_ptc
+```
+```@meta
+CurrentModule = PALEOmodel
+```
+```@docs
+Kinsol
+Kinsol.kin_create
+Kinsol.kin_solve
+```
+
 ## Fixed timestep solvers
 ```@meta
 CurrentModule = PALEOmodel.ODEfixed
@@ -81,31 +107,6 @@ CurrentModule = PALEOmodel.ThreadBarriers
 ```@docs
 ThreadBarrierAtomic
 ThreadBarrierCond
-```
-
-## Steady-state solvers (Julia [`NLsolve`](https://github.com/JuliaNLSolvers/NLsolve.jl) based)
-```@meta
-CurrentModule = PALEOmodel.SteadyState
-```
-```@docs
-steadystate
-steadystate_ptc
-```
-
-## Steady-state solvers (Sundials Kinsol based):
-```@meta
-CurrentModule = PALEOmodel.SteadyStateKinsol
-```
-```@docs
-steadystate_ptc
-```
-```@meta
-CurrentModule = PALEOmodel
-```
-```@docs
-Kinsol
-Kinsol.kin_create
-Kinsol.kin_solve
 ```
 
 ## Variable aggregation
