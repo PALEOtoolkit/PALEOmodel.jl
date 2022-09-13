@@ -12,16 +12,10 @@ using Logging
 import StaticArrays
 
 import NLsolve
-# import ..SolverFunctions
-# import ..ODE
-# import ..JacobianAD
-
-import PALEOmodel.SolverFunctions
-import PALEOmodel.ODE
-import PALEOmodel.JacobianAD
-import PALEOmodel.NonLinearNewton
-import PALEOmodel.SteadyState
-
+import ..SolverFunctions
+import ..ODE
+import ..JacobianAD
+import ..NonLinearNewton
 
 """
     split_dae(
@@ -30,8 +24,10 @@ import PALEOmodel.SteadyState
         tss_jac_sparsity=nothing,
         request_adchunksize=10,
         jac_cellranges=modeldata.cellranges_all,
-        operatorID_inner=0,
+        operatorID_inner=3,
+        transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],  # additional Variables needed by 'inner' Reactions
         init_logger=Logging.NullLogger(),
+        inner_kwargs=(reltol=1e-9, miniters=1, maxiters=10, verbose=0),
     ) -> (ModelSplitDAE, initial_state_outer)
 
 Given a model that contains both ODE variables and algebraic constraints, creates function objects for ODE variables,
@@ -50,10 +46,7 @@ function split_dae(
     operatorID_inner=3,
     transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],  # additional Variables needed by 'inner' Reactions
     init_logger=Logging.NullLogger(),
-    inner_reltol=1e-9,
-    inner_miniters=1,
-    inner_maxiters=10,
-    inner_verbose=4,
+    inner_kwargs=(reltol=1e-9, miniters=1, maxiters=10, verbose=0),
 )
     PB.check_modeldata(model, modeldata)
 
@@ -61,6 +54,10 @@ function split_dae(
     # We only support explicit ODE + DAE constraints (no implicit variables)
     iszero(PALEOmodel.num_total(sva))                 || error("implicit total variables not supported")
     !iszero(PALEOmodel.num_algebraic_constraints(sva)) || error("no algebraic constraints present")
+
+    # dispatch list excluding costly Reactions (eg radiative transfer)
+    # dispatchlists_jac = PB.create_dispatch_methodlists(model, modeldata, jac_cellranges)
+    dispatchlists_jac = nothing # disable
 
     # Variable aggegators for 'outer' ODE variables only
     va_outer_state = sva.stateexplicit
@@ -159,7 +156,7 @@ function split_dae(
     )
 
     # construct function objects to calculate per-cell constraint and Jacobian for 'inner' Variables
-    cellderivs, celljacs, cellidxfull = [], [], []
+    cellderivs, celljacs, cellidxfull, cellinitialstates = [], [], [], []
     cellworksp = fill(NaN, n_inner_solve)
     cellworksp_ad = fill(eltype_inner_ad(NaN), n_inner_solve)
    
@@ -168,6 +165,9 @@ function split_dae(
         vars_cellranges = [cellrange for i in 1:length(va_state.vars)]
         # modeldata Arrays to calculate residual
         va_cell_state = PB.VariableAggregator(va_state.vars, vars_cellranges, modeldata)
+        cell_initial_state = Vector{eltype(modeldata)}(undef, n_inner_solve)
+        copyto!(cell_initial_state, va_cell_state)
+        push!(cellinitialstates, cell_initial_state)
         va_cell_constraints = PB.VariableAggregator(va_constraints.vars, vars_cellranges, modeldata)
         va_cell_dl = PB.create_dispatch_methodlists(model, modeldata, [cellrange])
         push!(cellderivs, ModelDeriv(n_inner_solve, modeldata, va_cell_state, va_cell_constraints, va_cell_dl, cellworksp))
@@ -188,6 +188,7 @@ function split_dae(
         modeldata,
         sva,
         modeldata.dispatchlists_all,
+        dispatchlists_jac,
         jacfull,
         copy(jacfull_prototype),
         transfer_data_ad,
@@ -200,10 +201,8 @@ function split_dae(
         [c for c in cellderivs], # narrow type
         [c for c in celljacs], # narrow type
         [c for c in cellidxfull], # narrow_type
-        inner_reltol,
-        inner_miniters,
-        inner_maxiters,
-        inner_verbose,
+        [c for c in cellinitialstates], # narrow_type
+        inner_kwargs,
         similar(initial_state_outer),
         similar(initial_state),
     )
@@ -212,10 +211,11 @@ function split_dae(
 end
 
 # all Variables needed for inner and outer solve
-mutable struct ModelSplitDAE{T, SVA, DLA, JF, TD1, TD2, TD3, TD4, VA1, VA2, VA3, CD, CJ}
+mutable struct ModelSplitDAE{T, SVA, DLA, DLJ, JF, TD1, TD2, TD3, TD4, VA1, VA2, VA3, CD, CJ, IK}
     modeldata::PB.ModelData{T}
     solver_view_all::SVA
     dispatchlists_all::DLA
+    dispatchlists_jac::DLJ
     jacfull::JF
     jacfull_ws::SparseArrays.SparseMatrixCSC{T, Int64}
     transfer_data_ad::TD1
@@ -228,10 +228,8 @@ mutable struct ModelSplitDAE{T, SVA, DLA, JF, TD1, TD2, TD3, TD4, VA1, VA2, VA3,
     cellderivs::CD
     celljacs::CJ
     cellidxfull::Vector{Vector{Int64}}
-    inner_reltol::Float64
-    inner_miniters::Int64
-    inner_maxiters::Int64
-    inner_verbose::Int64
+    cellinitialstates::Vector{Vector{Float64}}
+    inner_kwargs::IK    
     outer_worksp::Vector{T}
     full_worksp::Vector{T}
 end
@@ -270,24 +268,31 @@ function (mode_outer::ModelODEOuter)(du_outer, u_outer, p, t)
 
     # Newton solution for inner state Variables for each cell
     # NB: cell_number corresponds to 1:number_of_cells, not the actual cell indices in cellrange.indices
-    for (cd, cj) in PB.IteratorUtils.zipstrict(ms.cellderivs, ms.celljacs)
-        copyto!(cd.worksp, cd.state)
-        initial_state = StaticArrays.SVector{ncomps(cd)}(cd.worksp)
-        ms.inner_verbose > 0 && @info "initial_state: $initial_state"
+    cellidx = 1
+    for (cd, cj, cs) in PB.IteratorUtils.zipstrict(ms.cellderivs, ms.celljacs, ms.cellinitialstates)
+        # use current value (from previous iteration) as starting value
+        # copyto!(cd.worksp, cd.state)
+        # initial_state = StaticArrays.SVector{ncomps(cd)}(cd.worksp)
+        # always start from initial state
+        initial_state = StaticArrays.SVector{ncomps(cd)}(cs)
+        ms.inner_kwargs.verbose > 0 && @info "cellidx: $cellidx initial_state: $initial_state"
         (_, Lnorm_2_cell, Lnorm_inf_cell, niter) = NonLinearNewton.solve(
             cd,
             cj, 
             initial_state;
-            reltol=ms.inner_reltol,
-            miniters=ms.inner_miniters,
-            maxiters=ms.inner_maxiters,
-            verbose=ms.inner_verbose,
+            ms.inner_kwargs...
         )
+        cellidx += 1 
     end
 
     # reevaluate full derivative with updated inner state variables
     # TODO this could be optimized eg don't need to rerun radiative transfer
-    PB.do_deriv(ms.dispatchlists_all)
+    if !isnothing(ms.dispatchlists_jac)
+        PB.do_deriv(ms.dispatchlists_jac)
+    else
+        PB.do_deriv(ms.dispatchlists_all)
+    end
+    
     copyto!(du_outer, ms.va_outer_state_deriv)
     
     # @Infiltrator.infiltrate
@@ -333,13 +338,14 @@ function (jac_outer::ModelJacOuter)(du_outer, J_outer, u_outer, p, t)
     # Jacobian of outer Variables
     ro = 1:size(J_outer, 1)
     # @Infiltrator.infiltrate
-    # TODO this changes the size (stored elements) of J_outer !!
-    J_outer .= J_full[ro, ro]
+    # NB: this changes the size (stored elements) of J_outer !!
+    # J_outer .= J_full[ro, ro]
+    add_sparse_fixed!(J_outer, J_full[ro, ro]) # TODO use view
 
     # add contributions per-cell from inner Variables using implicit function theorum    
-    for (cd, cj, ci) in PB.IteratorUtils.zipstrict(ms.cellderivs, ms.celljacs, ms.cellidxfull)
-        dG_dcellinner = J_full[ci, ci] # n_inner x n_inner (TODO could also get this from jac used for inner solve)
-        dG_douter = J_full[ci, ro] # n_inner x n_outer
+    for ci in ms.cellidxfull
+        dG_dcellinner = view(J_full, ci, ci) # n_inner x n_inner (TODO could also get this from jac used for inner solve)
+        dG_douter = J_full[ci, ro] # n_inner x n_outer - don't use view as view(sparse)*sparse is very slow
         
         # dcellinner_dcellouter = -dG_dcellinner \ dG_douter # n_inner x n_outer
         # \ is not implemented
@@ -356,8 +362,9 @@ function (jac_outer::ModelJacOuter)(du_outer, J_outer, u_outer, p, t)
 
         # @Infiltrator.infiltrate
         # n_outer x n_outer  +=  n_outer x n_inner  * n_inner x n_outer
-        # TODO this changes the size (stored elements) of J_outer !!
-        J_outer .+= J_full[ro, ci]*dcellinner_dcellouter 
+        # NB: this changes the size (stored elements) of J_outer !!
+        # J_outer .+= J_full[ro, ci]*dcellinner_dcellouter 
+        add_sparse_fixed!(J_outer, J_full[ro, ci]*dcellinner_dcellouter)
     end
 
     return nothing
@@ -397,112 +404,45 @@ function (mjfd::ModelJacForwardDiff)(x)
     return ForwardDiff.extract_jacobian(Nothing, ForwardDiff.static_dual_eval(Nothing, mjfd.modelderiv, x), x)
 end
 
-##############################################################
-# Adaptor for PTC 
-##############################################
 
-function nlsolveF_PTC(ms::ModelSplitDAE, initial_state_outer, jacouter_prototype)
 
-    # ODE function and Jacobian for 'outer' Variables, with inner Newton solve
-    modelode = SplitDAE.ModelODEOuter(ms)
-    jacode = SplitDAE.ModelJacOuter(ms, modelode)
 
-    tss = Ref(NaN)
-    deltat = Ref(NaN)
-    previous_u = similar(initial_state_outer)
-    du_worksp = similar(initial_state_outer)
- 
-    ssFJ! = FJacPTC(modelode, jacode, tss, deltat, previous_u, du_worksp)
-        
-    # function + sparse Jacobian with sparsity pattern defined by jac_prototype
-    df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state_outer), similar(initial_state_outer), copy(jacouter_prototype))         
-
-    return (ssFJ!, df)
-end
+###############################################
+# Sparse matrix additions
+###############################################
 
 """
-    FJacPTC
+    add_sparse_fixed!(A, B)
 
-Function object to calculate residual for a first-order Euler implicit timestep and adapt to NLsolve interface
+Sparse matrix `A .+= B`, without modifying sparsity pattern of `A`.
 
-Given:
-- ODE time derivative `du(t)/dt` supplied at construction time by function object `modelode(du, u, p, t)`
-- ODE Jacobian `d(du(t)/dt)/du` supplied at construction time by function  object `jacode(J, u, p, t)`
-- `t`, `delta_t`, `previous_u` set by `set_step!` before each function call.
+Errors if `B` contains elements not in sparsity pattern of `A`
 
-Calculates `F(u)` and `J(u)` (Jacobian of `F`), where `F(u)` is the residual for a timestep `delta_t` to time `t`
-from state `previous_u`:
-- `F(u) = (u(t) - previous_u + delta_t * du(t)/dt)`
-- `J(u) = I - deltat * d(du(t)/dt)/du`
+    julia> A = SparseArrays.sparse([1, 4], [2, 3], [1.0, 1.0], 4, 4)
+    julia> B = SparseArrays.sparse([1], [2], [2.0], 4, 4)
+    julia> SplitDAE.add_sparse_fixed!(A, B) # OK
+    julia> C = SparseArrays.sparse([2], [2], [2.0], 4, 4)
+    julia> SplitDAE.add_sparse_fixed!(A, C) # errors
+
+TODO views, SubArray{Float64, 2, SparseArrays.SparseMatrixCSC{Float64, Int64}}
 """
-struct FJacPTC{M, J, W}
-    modelode::M
-    jacode::J
-    t::Ref{Float64}
-    delta_t::Ref{Float64}
-    previous_u::W
-    du_worksp::W
-end
+function add_sparse_fixed!(A::SparseArrays.SparseMatrixCSC, B::SparseArrays.SparseMatrixCSC)
+    size(A) == size(B) || error("A and B are not the same size")
 
-"""
-    set_step!(fjp::FJacPTC, t, deltat, previous_u)
-
-Set time to step to `t`, `delta_t` of this step, and `previous_u` (value of state vector at previous time step `t - delta_t`).
-"""
-function SteadyState.set_step!(fjp::FJacPTC, t, deltat, previous_u)
-    fjp.t[] = t
-    fjp.delta_t[] = deltat
-    fjp.previous_u .= previous_u
-
-    return nothing
-end
-
-# F only
-function (jn::FJacPTC)(F, u)
-    jn.modelode(jn.du_worksp, u, nothing, jn.t[])
-
-    F .=  (u .- jn.previous_u - jn.delta_t[].*jn.du_worksp)
-
-    # @Infiltrator.infiltrate
-
-    return nothing
-end
-
-# Jacobian only (just discard F)
-function (jn::FJacPTC)(J::SparseArrays.SparseMatrixCSC, u)
-    jn(nothing, J, u)
-
-    # @Infiltrator.infiltrate
-
-    return nothing
-end
-
-# F and J
-function (jn::FJacPTC)(F, J::SparseArrays.SparseMatrixCSC, u)
-    
-    jn.jacode(jn.du_worksp, J, u, nothing, jn.t[])
-
-    if !isnothing(F)
-        F .=  (u .- jn.previous_u - jn.delta_t[].*jn.du_worksp)
-    end
-
-    # @Infiltrator.infiltrate
-    # convert J  = I - deltat * odeJac  
-    for j in 1:size(J)[2]
-        # idx is index in SparseMatrixCSC compressed storage, i is row index
-        for idx in J.colptr[j]:(J.colptr[j+1]-1)
-            i = J.rowval[idx]
-
-            J.nzval[idx] = -jn.delta_t[]*J.nzval[idx]                
-
-            if i == j
-                J.nzval[idx] += 1.0
-            end                
+    for j in 1:size(B, 2)
+        idx_A = A.colptr[j]
+        for idx_B in B.colptr[j]:(B.colptr[j+1]-1)
+            i_B = B.rowval[idx_B]
+            while idx_A < A.colptr[j+1] && A.rowval[idx_A] != i_B
+                idx_A += 1
+            end
+            idx_A < A.colptr[j+1] || error("element [$i_B, $j] in B is not present in A")
+            A.nzval[idx_A] += B.nzval[idx_B]
         end
     end
-
-    return nothing
+    return A
 end
+
 
 
 end # module
