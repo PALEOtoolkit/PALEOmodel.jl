@@ -309,7 +309,7 @@ function steadystate_ptc_splitdae(
 )
     PB.check_modeldata(run.model, modeldata)
 
-    ms, initial_state_outer, jacouter_prototype = SplitDAE.split_dae(
+    ms, initial_state_outer, jacouter_prototype = SplitDAE.create_split_dae(
         run.model, initial_state, modeldata; 
         jac_cellranges=jac_cellranges,
         request_adchunksize=request_adchunksize,
@@ -738,16 +738,13 @@ end
 
 function nlsolveF_SplitPTC(ms::SplitDAE.ModelSplitDAE, initial_state_outer, jacouter_prototype)
 
-    # ODE function and Jacobian for 'outer' Variables, with inner Newton solve
-    modelode = SplitDAE.ModelODEOuter(ms)
-    jacode = SplitDAE.ModelJacOuter(ms, modelode)
-
     tss = Ref(NaN)
     deltat = Ref(NaN)
     previous_u = similar(initial_state_outer)
     du_worksp = similar(initial_state_outer)
  
-    ssFJ! = FJacSplitPTC(modelode, jacode, tss, deltat, previous_u, du_worksp)
+    # SplitDAE.ModelSplitDAE provides both ODE and Jacobian functions
+    ssFJ! = FJacSplitPTC(ms, ms, tss, deltat, previous_u, du_worksp)
         
     # function + sparse Jacobian with sparsity pattern defined by jac_prototype
     df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state_outer), similar(initial_state_outer), copy(jacouter_prototype))         
