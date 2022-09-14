@@ -301,8 +301,7 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, u_outer::AbstractVector, 
     end
     
     copyto!(du_outer, ms.va_outer_state_deriv)
-    
-    # @Infiltrator.infiltrate
+
     return nothing
 end
 
@@ -337,7 +336,6 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, J_outer::SparseArrays.Abs
     J_outer.nzval .= 0.0
     # Jacobian of outer Variables
     ro = 1:size(J_outer, 1)
-    # @Infiltrator.infiltrate
     # NB: this changes the size (stored elements) of J_outer !!
     # J_outer .= J_full[ro, ro]
     add_sparse_fixed!(J_outer, J_full[ro, ro]) # TODO use view
@@ -352,7 +350,6 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, J_outer::SparseArrays.Abs
         dG_dcellinner_inv = get_sparse_inverse(dG_dcellinner)
         dcellinner_dcellouter = -dG_dcellinner_inv * dG_douter # n_inner x n_outer
 
-        # @Infiltrator.infiltrate
         # n_outer x n_outer  +=  n_outer x n_inner  * n_inner x n_outer
         # NB: this changes the size (stored elements) of J_outer !!
         # J_outer .+= J_full[ro, ci]*dcellinner_dcellouter 

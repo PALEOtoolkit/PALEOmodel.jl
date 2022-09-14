@@ -343,7 +343,7 @@ end
 Pseudo-transient continuation using NLsolve with `nlsolveF` function objects created by `nlsolveF_PTC`
 """
 function solve_ptc(
-    run, initial_state, nlsolveF, tspan, deltat_initial::Float64;
+    run, initial_state, @nospecialize(nlsolveF), tspan, deltat_initial::Float64;
     deltat_fac=2.0,
     tss_output=[],
     max_iter=1000,
@@ -521,15 +521,15 @@ from state `previous_u`:
 - `F(u) = (u(t) - previous_u + delta_t * du(t)/dt)`
 - `J(u) = I - deltat * d(du(t)/dt)/du`
 """
-struct FJacPTC{M, J, T1, T2, W}
-    modelode::M
-    jacode::J
+struct FJacPTC{T1, T2}
+    modelode #::M no specialization to minimise recompilation
+    jacode #::J
     t::Ref{Float64}
     delta_t::Ref{Float64}
     transfer_data_ad::T1
     transfer_data::T2
-    previous_u::W
-    du_worksp::W
+    previous_u::Vector{Float64}
+    du_worksp::Vector{Float64}
 end
 
 """
@@ -667,13 +667,20 @@ from state `previous_u`:
 - `F(u) = (u(t) - previous_u + delta_t * du(t)/dt)`
 - `J(u) = I - deltat * d(du(t)/dt)/du`
 """
-struct FJacSplitPTC{M, J, W}
-    modelode::M
-    jacode::J
+struct FJacSplitPTC
+    modeljacode # ::M # no specialization as this seems to cause compiler issues with Julia 1.7.3
     t::Ref{Float64}
     delta_t::Ref{Float64}
-    previous_u::W
-    du_worksp::W
+    previous_u::Vector{Float64}
+    du_worksp::Vector{Float64}
+end
+
+function Base.getproperty(obj::FJacSplitPTC, sym::Symbol)
+    if sym === :modelode
+        return obj.modeljacode
+    else
+        return getfield(obj, sym)
+    end
 end
 
 """
@@ -690,35 +697,31 @@ function set_step!(fjp::FJacSplitPTC, t, deltat, previous_u)
 end
 
 # F only
-function (jn::FJacSplitPTC)(F, u)
-    jn.modelode(jn.du_worksp, u, nothing, jn.t[])
+function (jn::FJacSplitPTC)(F::AbstractVector, u::AbstractVector)
+
+    jn.modeljacode(jn.du_worksp, u, nothing, jn.t[])
 
     F .=  (u .- jn.previous_u - jn.delta_t[].*jn.du_worksp)
-
-    # @Infiltrator.infiltrate
 
     return nothing
 end
 
 # Jacobian only (just discard F)
-function (jn::FJacSplitPTC)(J::SparseArrays.SparseMatrixCSC, u)
+function (jn::FJacSplitPTC)(J::SparseArrays.SparseMatrixCSC, u::AbstractVector)
     jn(nothing, J, u)
-
-    # @Infiltrator.infiltrate
 
     return nothing
 end
 
 # F and J
-function (jn::FJacSplitPTC)(F, J::SparseArrays.SparseMatrixCSC, u)
+function (jn::FJacSplitPTC)(F::Union{Nothing, AbstractVector}, J::SparseArrays.SparseMatrixCSC, u::AbstractVector)
     
-    jn.jacode(jn.du_worksp, J, u, nothing, jn.t[])
+    jn.modeljacode(jn.du_worksp, J, u, nothing, jn.t[])
 
     if !isnothing(F)
         F .=  (u .- jn.previous_u - jn.delta_t[].*jn.du_worksp)
     end
 
-    # @Infiltrator.infiltrate
     # convert J  = I - deltat * odeJac  
     for j in 1:size(J)[2]
         # idx is index in SparseMatrixCSC compressed storage, i is row index
@@ -744,10 +747,10 @@ function nlsolveF_SplitPTC(ms::SplitDAE.ModelSplitDAE, initial_state_outer, jaco
     du_worksp = similar(initial_state_outer)
  
     # SplitDAE.ModelSplitDAE provides both ODE and Jacobian functions
-    ssFJ! = FJacSplitPTC(ms, ms, tss, deltat, previous_u, du_worksp)
-        
+    ssFJ! = FJacSplitPTC(ms, tss, deltat, previous_u, du_worksp)
+
     # function + sparse Jacobian with sparsity pattern defined by jac_prototype
-    df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state_outer), similar(initial_state_outer), copy(jacouter_prototype))         
+    df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state_outer), similar(initial_state_outer), copy(jacouter_prototype))
 
     return (ssFJ!, df)
 end
