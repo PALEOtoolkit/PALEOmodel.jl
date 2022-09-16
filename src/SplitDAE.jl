@@ -67,8 +67,8 @@ function create_split_dae(
     !iszero(PALEOmodel.num_algebraic_constraints(sva)) || error("no algebraic constraints present")
 
     # dispatch list to recalculate derivative after inner solve. Could exclude costly Reactions (eg radiative transfer)
-    # dispatchlists_recalc_deriv = PB.create_dispatch_methodlists(model, modeldata, jac_cellranges)
-    dispatchlists_recalc_deriv = nothing # disable
+    dispatchlists_recalc_deriv = PB.create_dispatch_methodlists(model, modeldata, jac_cellranges)
+    # dispatchlists_recalc_deriv = nothing # disable
 
     # Variable aggegators for 'outer' ODE variables only
     va_outer_state = sva.stateexplicit
@@ -93,37 +93,7 @@ function create_split_dae(
         modeldata
     )
 
-    # sparsity pattern for outer Jacobian
-    ro = 1:length(va_outer_state) # indices of 'outer' variables
-    ri = (length(va_outer_state)+1):length(initial_state)
-    jacouter_prototype = jacfull_prototype[ro, ro]
-
-    # include contributions from inner state Variables
-    dG_dcellinner = jacfull_prototype[ri, ri] # n_inner x n_inner
-    dG_douter = jacfull_prototype[ri, ro] # n_inner x n_outer
-    # try and generate a non-singular matrix by setting values
-    for i in eachindex(dG_dcellinner.nzval)
-        dG_dcellinner.nzval[i] = i
-    end
-    # dcellinner_dcellouter = -dG_dcellinner \ dG_douter # n_inner x n_outer
-    # \ is not implemented for sparse RHS, so as a workaround, get an inverse with the correct sparsity    
-    dG_dcellinner_inv = get_sparse_inverse(dG_dcellinner)  
-    dcellinner_dcellouter = -dG_dcellinner_inv * dG_douter # n_inner x n_outer
-
-    # n_outer x n_outer  +=  n_outer x n_inner  * n_inner x n_outer
-    jacouter_implicit = jacfull_prototype[ro, ri]*dcellinner_dcellouter
-    jacouter_implicit.nzval .= 1
-
-    # combine to get full sparsity pattern
-    io = IOBuffer()
-    println(io, "split_dae:")
-    println(io, "    calculating 'outer' Jacobian sparsity pattern:")
-    println(io, "        jacouter (outer variables, $(size(jacouter_prototype))): nnz=$(SparseArrays.nnz(jacouter_prototype))")
-    println(io, "        jacouter_implicit (from inner variables): nnz=$(SparseArrays.nnz(jacouter_implicit))")
-    jacouter_prototype += jacouter_implicit
-    jacouter_prototype.nzval .= 1
-    println(io, "        jacouter (all variables): nnz=$(SparseArrays.nnz(jacouter_prototype))")
-
+    
     # find all (state, constraint) algebraic constraints
     vinner_names = []
     vinner_indices = []
@@ -131,6 +101,7 @@ function create_split_dae(
     va_state = sva.state
     va_constraints = sva.constraints
     
+    io = IOBuffer()
     println(io, "    algebraic constraint Variables for inner Newton solve:")
     for (var, indices) in zip(va_state.vars, va_state.indices)
         println(io, "        $(PB.fullname(var))  indices $indices")
@@ -148,6 +119,7 @@ function create_split_dae(
     # create a modeldata_ad with Dual numbers for AD Jacobians for 'inner' Newton solve
     n_inner_solve = length(vinner_names)
     println(io, "   using ForwardDiff dense Jacobian for inner Newton solve")
+    @info String(take!(io))
     eltype_inner_ad = ForwardDiff.Dual{Nothing, eltype(modeldata), n_inner_solve}
     _, modeldata_ad_inner = Logging.with_logger(init_logger) do
         PALEOmodel.initialize!(model, eltype=eltype_inner_ad)
@@ -190,6 +162,36 @@ function create_split_dae(
         push!(cellvaridxfull, va_cell_idx)
     end
 
+    # sparsity pattern for outer Jacobian
+    ro = 1:length(va_outer_state) # indices of 'outer' variables
+    ri = (length(va_outer_state)+1):length(initial_state)
+    jacouter_prototype = jacfull_prototype[ro, ro]
+
+    # include contributions from inner state Variables
+    dG_dcellinner = jacfull_prototype[ri, ri] # n_inner x n_inner
+    dG_douter = jacfull_prototype[ri, ro] # n_inner x n_outer
+    # try and generate a non-singular matrix by setting values
+    for i in eachindex(dG_dcellinner.nzval)
+        dG_dcellinner.nzval[i] = i
+    end
+    # dcellinner_dcellouter = -dG_dcellinner \ dG_douter # n_inner x n_outer
+    # \ is not implemented for sparse RHS, so as a workaround, get an inverse with the correct sparsity    
+    dG_dcellinner_inv = get_sparse_inverse(dG_dcellinner)  
+    dcellinner_dcellouter = -dG_dcellinner_inv * dG_douter # n_inner x n_outer
+
+    # n_outer x n_outer  +=  n_outer x n_inner  * n_inner x n_outer
+    jacouter_implicit = jacfull_prototype[ro, ri]*dcellinner_dcellouter
+    jacouter_implicit.nzval .= 1
+
+    # combine to get full sparsity pattern
+    io = IOBuffer()
+    println(io, "split_dae:")
+    println(io, "    calculating 'outer' Jacobian sparsity pattern:")
+    println(io, "        jacouter (outer variables, $(size(jacouter_prototype))): nnz=$(SparseArrays.nnz(jacouter_prototype))")
+    println(io, "        jacouter_implicit (from inner variables): nnz=$(SparseArrays.nnz(jacouter_implicit))")
+    jacouter_prototype += jacouter_implicit
+    jacouter_prototype.nzval .= 1
+    println(io, "        jacouter (all variables): nnz=$(SparseArrays.nnz(jacouter_prototype))")
     @info String(take!(io))
 
     ms = ModelSplitDAE(
