@@ -287,6 +287,7 @@ As [`steadystate_ptc`](@ref), with an inner Newton solve for per-cell algebraic 
 - `operatorID_inner=3`: operatorID for Reactions to run for inner solve (typically all reservoirs and chemical reactions)
 - `transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"]`: Variables not calculated by `operatorID_inner` that need to be copied for 
   inner solve (additional to those with `transfer_jacobian` set).
+- `inner_jac_ad::Symbol=:ForwardDiff`: form of automatic differentiation to use for Jacobian for inner `NonlinearNewton.solve` solver (options `:ForwardDiff`, `:ForwardDiffSparse`)
 - `inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60)`: keywords for inner 
   `NonlinearNewton.solve` solver.
 """
@@ -303,7 +304,8 @@ function steadystate_ptc_splitdae(
     sol_min=-Inf,
     verbose=false,
     operatorID_inner=3,
-    transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"], 
+    transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],
+    inner_jac_ad=:ForwardDiff,
     inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
     BLAS_num_threads=1
 )
@@ -315,7 +317,8 @@ function steadystate_ptc_splitdae(
         request_adchunksize=request_adchunksize,
         operatorID_inner=operatorID_inner,
         transfer_inner_vars=transfer_inner_vars,
-        tss_jac_sparsity=tspan[1], 
+        tss_jac_sparsity=tspan[1],
+        inner_jac_ad=inner_jac_ad, 
         inner_kwargs=inner_kwargs,
     )
 

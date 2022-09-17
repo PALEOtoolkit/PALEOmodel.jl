@@ -4,6 +4,7 @@ import PALEOboxes as PB
 
 import PALEOmodel
 import ..SolverFunctions
+import ..SparseUtils
 
 import LinearAlgebra
 import Infiltrator
@@ -51,6 +52,7 @@ function jac_config_ode(
     jac_ad::Symbol, model::PB.Model, initial_state, modeldata, jac_ad_t_sparsity;
     request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     jac_cellranges=modeldata.cellranges_all,
+    fill_jac_diagonal=true,
     init_logger=Logging.NullLogger(),
 )
     @info "jac_config_ode: jac_ad=$jac_ad"
@@ -102,7 +104,7 @@ function jac_config_ode(
             model, initial_state, jac_ad_t_sparsity,
             jac_cellranges=jac_cellranges, init_logger=init_logger,
         ) 
-        jac_prototype = fill_sparse_jac(jac_proto_unfilled)
+        jac_prototype = SparseUtils.fill_sparse_jac(jac_proto_unfilled; fill_diagonal=fill_jac_diagonal)
         # println("using jac_prototype: ", jac_prototype)
        
         colorvec = SparseDiffTools.matrix_colors(jac_prototype)
@@ -229,7 +231,7 @@ function jac_config_dae(
             model, initial_state, jac_ad_t_sparsity,
             jac_cellranges=jac_cellranges, init_logger=init_logger,
         ) 
-        jac_prototype = fill_sparse_jac(jac_proto_unfilled)
+        jac_prototype = SparseUtils.fill_sparse_jac(jac_proto_unfilled)
         # println("using jac_prototype: ", jac_prototype)
        
         colorvec = SparseDiffTools.matrix_colors(jac_prototype)
@@ -243,7 +245,7 @@ function jac_config_dae(
                 model, initial_state, jac_ad_t_sparsity, modeldata_sparsitytracing,
                 implicit_cellranges=implicit_cellranges
             )        
-            implicit_prototype = fill_sparse_jac(implicit_proto_unfilled, fill_diagonal=false)
+            implicit_prototype = SparseUtils.fill_sparse_jac(implicit_proto_unfilled, fill_diagonal=false)
             implicit_colorvec = SparseDiffTools.matrix_colors(implicit_prototype)
             @info "  implicit_prototype nnz=$(SparseArrays.nnz(implicit_prototype)) num colors=$(maximum(implicit_colorvec))"
 
@@ -441,26 +443,7 @@ function calcImplicitSparsitySparsityTracing!(
     return initial_dTdS
 end
 
-"fill structural non-zeros: return sparse matrix with all stored elements filled with `val`"
-function fill_sparse_jac(initial_jac; val=1.0, fill_diagonal=true)
-    num_elements = size(initial_jac, 1)*size(initial_jac, 2)
 
-    @info "  fill_sparse_jac: initial_jac nnz $(SparseArrays.nnz(initial_jac)) "*
-        "($(round(100*SparseArrays.nnz(initial_jac)/num_elements, sigdigits=3))%) non-zero $(count(!iszero, initial_jac))"
-    I, J, V = SparseArrays.findnz(initial_jac)
-
-    jac_filled = SparseArrays.sparse(I, J, val, size(initial_jac, 1), size(initial_jac, 2) )
-    if fill_diagonal
-        size(initial_jac, 1) == size(initial_jac, 2) ||
-            error("fill_sparse_jac: fill_diagonal == true and Jacobian is not square")
-        for i = 1:size(initial_jac, 1)
-            jac_filled[i, i] = val
-        end
-        @info "  fill_sparse_jac: after filling diagonal nnz $(SparseArrays.nnz(jac_filled))"     
-    end
-
-    return jac_filled
-end
 
 
 #####################################################################
