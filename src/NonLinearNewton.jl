@@ -1,5 +1,7 @@
 module NonLinearNewton
 
+import Infiltrator
+
 import LinearAlgebra
 
 """
@@ -42,11 +44,11 @@ function solve(
     verbose >= 1 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf u $u residual $residual"
     
     if (Lnorm_inf > reltol || iters < miniters)
-        jacobian = jac(u)
+        jacobianfac = jac(u)
         while (Lnorm_inf > reltol || iters < miniters) && iters < maxiters
             
-            verbose >= 4 && @info "iters $iters jac:" jacobian
-            u = u - jacobian \ residual
+            verbose >= 4 && @info "iters $iters jac:" jacobianfac
+            u = u - jacobianfac \ residual
             if u_min != -Inf
                 u = max.(u, u_min)
             end
@@ -56,7 +58,7 @@ function solve(
             Lnorm_inf = LinearAlgebra.norm(residual, Inf)
 
             if !jac_constant && Lnorm_inf > reltol
-                jacobian = jac(u)
+                jacobianfac = jac(u)
             end
             
             verbose >= 2 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf"

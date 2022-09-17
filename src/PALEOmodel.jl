@@ -13,7 +13,7 @@ PB.value_ad(x::ForwardDiff.Dual) = ForwardDiff.value(x)
 abstract type AbstractOutputWriter
 end
 
-# include("Plot.jl")
+include("SparseUtils.jl")
 
 include("SolverView.jl")
 

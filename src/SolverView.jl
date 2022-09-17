@@ -276,8 +276,12 @@ function create_solver_view(
                     exclude_var_nameroots=exclude_var_nameroots
                 )
 
-            append!(var_vec, vars)
-            if !isnothing(var_deriv_vec)
+            if isnothing(var_deriv_vec)
+                # sort by name: VF_Constraint and VF_State are unpaired in general, but in some cases will have a convenient ordering based on name
+                sort!(vars; by=v->PB.fullname(v))
+                append!(var_vec, vars)
+            else
+                append!(var_vec, vars)
                 append!(var_deriv_vec, vars_deriv)
             end
             if !isnothing(cr_vec)

@@ -14,4 +14,6 @@ include("runkinsoltests.jl")
 
 include("runoutputwritertests.jl")
 
+include("testsparseutils.jl")
+
 end
