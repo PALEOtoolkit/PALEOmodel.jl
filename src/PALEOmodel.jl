@@ -6,6 +6,8 @@ import PALEOboxes as PB
 import ForwardDiff
 import SparsityTracing
 
+using TimerOutputs: @timeit
+
 # Get scalar value from variable x (discarding any AD derivatives)
 PB.value_ad(x::SparsityTracing.ADval) = SparsityTracing.value(x)
 PB.value_ad(x::ForwardDiff.Dual) = ForwardDiff.value(x)

@@ -11,6 +11,7 @@ import SparseDiffTools
 import Infiltrator
 using Logging
 import StaticArrays
+using TimerOutputs: @timeit
 
 import NLsolve
 import ..SolverFunctions
@@ -63,6 +64,7 @@ function create_split_dae(
     init_logger=Logging.NullLogger(),
     inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
 )
+
     PB.check_modeldata(model, modeldata)
 
     # Notation:
@@ -83,7 +85,7 @@ function create_split_dae(
     !iszero(PALEOmodel.num_algebraic_constraints(sva)) || error("no algebraic constraints present")
 
     # dispatch list to recalculate derivative after inner solve. Could exclude costly Reactions (eg radiative transfer)
-    dispatchlists_recalc_deriv = PB.create_dispatch_methodlists(model, modeldata, jac_cellranges)
+    @timeit "dispatchlists_recalc_deriv" dispatchlists_recalc_deriv = PB.create_dispatch_methodlists(model, modeldata, jac_cellranges)
     # dispatchlists_recalc_deriv = nothing # disable
 
     # Variable aggegators for 'outer' ODE variables only
@@ -124,6 +126,7 @@ function create_split_dae(
     cellcellranges, cellderivs, cellstateidxfull, cellconstraintsidxfull, cellinitialstates = [], [], [], [], [], []
     cellworksp = fill(NaN, n_inner_solve)
    
+    @timeit "cell_functions" begin
     for i in cellrange_inner.indices
         # create a cellrange that refers to this one cell
         cellrange = PB.CellRange(cellrange_inner.domain, cellrange_inner.operatorID, i)
@@ -145,19 +148,21 @@ function create_split_dae(
         push!(cellstateidxfull, [indices[i] + length(va_stateexplicit) for indices in va_state.indices])
         push!(cellconstraintsidxfull, [indices[i] + length(va_stateexplicit_deriv) for indices in va_constraints.indices])
     end
-
+    end # timeit
     ##########################################################################################    
     # Get function object and sparsity pattern for full sparse jacobian 
     # jacfull(Jfull, u, p, t) where Jfull has sparsity pattern jacfull_prototype
     ###############################################################################
 
     @info "create_split_dae:  creating full Jacobian using :ForwardDiffSparse"
+    @timeit "jacfull" begin
     jacfull, jacfull_prototype = PALEOmodel.JacobianAD.jac_config_ode(
         :ForwardDiffSparse, model, initial_state, modeldata, tss_jac_sparsity,
         request_adchunksize=request_adchunksize,
         jac_cellranges=jac_cellranges,
         fill_jac_diagonal=false,
     )
+    end # timeit
     @info "create_split_dae:  Variables to be copied from 'modeldata' before full Jacobian calculation:"
     # any Variables calculated by modelode but not jacode, that need to be copied
     transfer_data_jacfull, transfer_data = PALEOmodel.JacobianAD.jac_transfer_variables(
@@ -169,7 +174,7 @@ function create_split_dae(
     #########################################################################################
     # Calculate Jacobian sparsity patterns for outer and inner Jacobians from full Jacobian
     #########################################################################################
-    
+    @timeit "sparsity_patterns" begin
     # sparsity pattern for outer Jacobian
     ijrange_outer = 1:length(va_stateexplicit) # indices of 'outer' variables
     # ri = (length(va_stateexplicit)+1):length(initial_state)
@@ -224,6 +229,7 @@ function create_split_dae(
     println(io, "        jacouter (all variables):")
     jacouter_prototype = SparseUtils.fill_sparse_jac(jacouter_prototype; val=1.0, fill_diagonal=true)
 
+    end # timeit
     #########################################################################
     # create a modeldata_jaccell with Dual numbers for AD Jacobians for 'inner' Newton solve
     #####################################################################
@@ -250,9 +256,11 @@ function create_split_dae(
         error("unrecognized inner_jac_ad $inner_jac_ad")
     end
 
+    @timeit "modeldata_jaccell initialize!" begin
     _, modeldata_jaccell = Logging.with_logger(init_logger) do
-        PALEOmodel.initialize!(model, eltype=eltype_jaccell)
+        PALEOmodel.initialize!(model, eltype=eltype_jaccell, create_dispatchlists_all=false)
     end
+    end # timeit
     va_stateexplicit_jaccell = modeldata_jaccell.solver_view_all.stateexplicit
     println(io, "    Variables to be copied from 'modeldata' before inner Newton solve Jacobian calculation:")
     @info String(take!(io))
@@ -270,6 +278,7 @@ function create_split_dae(
     jaccells = []
     cellworksp_jaccell = fill(eltype_jaccell(NaN), n_inner_solve)
     cellworksp_jacsparse = copy(jacinner_prototype)
+    @timeit "cell_jacobians" begin
     for cellrange in cellcellranges
         # modeldata_jaccell Arrays to calculate constraints, with appropriate Dual number element type
         vars_cellranges = fill(cellrange, n_inner_solve)
@@ -298,8 +307,9 @@ function create_split_dae(
 
         push!(jaccells, jaccell)
     end
+    end # timeit
     
-    ms = ModelSplitDAE(
+    @timeit "ms" ms = ModelSplitDAE(
         modeldata,
         sva,
         modeldata.dispatchlists_all,
