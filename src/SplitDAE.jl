@@ -185,6 +185,7 @@ function create_split_dae(
     dG_dcellinner_lu = nothing
     jacinner_prototype = nothing
    
+    celldGdoutercols = []
     for (cidx, sci, cci) in zip(cellrange_inner.indices, cellstateidxfull, cellconstraintsidxfull)
         dG_dcellinner = jacfull_prototype[cci, sci] # n_inner x n_inner (sparsity pattern of Jacobian for inner solve)
         if isnothing(jacinner_prototype)
@@ -195,7 +196,9 @@ function create_split_dae(
         end
 
         dG_douter = jacfull_prototype[cci, ijrange_outer] # n_inner x n_outer
-        
+        # optimization - record nonzero columns
+        dG_douter_cols = Int64[j for j in ijrange_outer if SparseArrays.nnz(dG_douter[:, j-first(ijrange_outer)+1]) > 0]
+        push!(celldGdoutercols, dG_douter_cols)
         # try and generate a non-singular matrix by setting values
         for i in eachindex(dG_dcellinner.nzval)
             dG_dcellinner.nzval[i] = i
@@ -215,7 +218,10 @@ function create_split_dae(
         dcellinner_dcellouter = -dG_dcellinner_inv * dG_douter # n_inner x n_outer
 
         # n_outer x n_outer  +=  n_outer x n_inner  * n_inner x n_outer
-        jacouter_implicit += jacfull_prototype[ijrange_outer, sci]*dcellinner_dcellouter 
+        jacouter_implicit += jacfull_prototype[ijrange_outer, sci]*dcellinner_dcellouter
+
+        
+    
     end
 
     # combine to get full sparsity pattern
@@ -329,6 +335,7 @@ function create_split_dae(
         [c for c in cellstateidxfull], # narrow_type
         [c for c in cellconstraintsidxfull], # narrow_type
         [c for c in cellinitialstates], # narrow_type
+        [c for c in celldGdoutercols], # narrow type
         inner_kwargs,
         similar(initial_state_outer),
         similar(initial_state),
@@ -373,6 +380,7 @@ struct ModelSplitDAE{T, SVA, DLA, DLR, JF, TD1, TD2, TD3, TD4, VA1, VA2, VA3, CD
     cellstateidxfull::Vector{Vector{Int64}}
     cellconstraintsidxfull::Vector{Vector{Int64}}
     cellinitialstates::Vector{Vector{Float64}}
+    celldGdoutercols::Vector{Vector{Int64}}
     inner_kwargs::IK    
     outer_worksp::Vector{T}
     full_worksp::Vector{T}
@@ -481,16 +489,17 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, J_outer::SparseArrays.Abs
     # per-column version
     dG_douter = zeros(length(first(ms.cellstateidxfull)))
     dcellinner_dcellouter = similar(dG_douter)
-    tmpcol = ms.outer_worksp # length(ro)
-    for (sci, cci) in zip(ms.cellstateidxfull, ms.cellconstraintsidxfull)
+    # tmpcol = ms.outer_worksp # length(ro)
+    tmpcol = SparseUtils.SparseVecAccum()
+    for (sci, cci, dG_douter_cols) in zip(ms.cellstateidxfull, ms.cellconstraintsidxfull, ms.celldGdoutercols)
         dG_dcellinner = J_full[cci, sci] # n_inner x n_inner (TODO could also get this from jac used for inner solve)
 
         LinearAlgebra.lu!(ms.dG_dcellinner_lu, dG_dcellinner)
         # per-column loop
-        for j_outer in ijrange_outer
+        for j_outer in dG_douter_cols
             # dG_douter = J_full[cci, j_outer]
-            # if !iszero(SparseUtils.get_column_sparse!(dG_douter, (@view J_full[cci, j_outer]))) # view is slow
-            if !iszero(SparseUtils.get_column_sparse!(dG_douter, J_full, cci, j_outer))
+            if !iszero(SparseUtils.get_column_sparse!(dG_douter, (@view J_full[cci, j_outer]))) # view is slow
+            # if !iszero(SparseUtils.get_column_sparse!(dG_douter, J_full, cci, j_outer))
         
                 dcellinner_dcellouter .= ms.dG_dcellinner_lu \ dG_douter # n_inner
                 dcellinner_dcellouter .*= -1.0

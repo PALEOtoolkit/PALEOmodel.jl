@@ -55,17 +55,66 @@ end
     
 end
 
+@testset "add_column_sparse_fixed! accum" begin
+    A = SparseArrays.sprand(10, 10, 1e-1)
+
+    for j in 1:10
+        x = SU.SparseVecAccum()
+        for (iv, v) in enumerate(A[:, j])
+            SU.add_element!(x, (v, iv))
+        end
+        A_copy = copy(A)
+        SU.add_column_sparse_fixed!(view(A_copy, :, j), x)
+        @test A_copy[:, j] == 2*A[:, j]
+    end
+    
+end
+
 @testset "mult_sparse_vec!" begin
     A = SparseArrays.sprand(10, 10, 1e-1)
 
     x = ones(6)
     y = ones(3)
 
-    SU.mult_sparse_vec!(y, view(A, 5:7, 2:7), x)
-    @test y == A[5:7, 2:7]*x
+    for o in -1:3
+        ir = (5+o):(7+o)
+        jr = (2+o):(7+o)
+        SU.mult_sparse_vec!(y, view(A, ir, jr), x)
+        @test y == A[ir, jr]*x
 
-    SU.mult_sparse_vec!(y, (@view A[5:7, 2:7]), x)
-    @test y == A[5:7, 2:7]*x
+        SU.mult_sparse_vec!(y, view(A, collect(ir), jr), x)
+        @test y == A[ir, jr]*x
+
+        SU.mult_sparse_vec!(y, (@view A[ir, jr]), x)
+        @test y == A[ir, jr]*x
+
+        SU.mult_sparse_vec!(y, (@view A[collect(ir), jr]), x)
+        @test y == A[ir, jr]*x
+    end
+
+end
+
+@testset "mult_sparse_vec! accum" begin
+    A = SparseArrays.sprand(10, 10, 1e-1)
+
+    x = ones(6)
+    y = SU.SparseVecAccum()
+    yv = ones(3)
+
+    for o in -1:3
+        ir = (5+o):(7+o)
+        jr = (2+o):(7+o)
+        SU.mult_sparse_vec!(y, view(A, ir, jr), x)
+        sort!(y)
+        copyto!(yv, y)
+        @test yv == A[ir, jr]*x
+
+        SU.mult_sparse_vec!(y, (@view A[ir, jr]), x)
+        sort!(y)
+        copyto!(yv, y)
+        @test yv == A[ir, jr]*x
+
+    end
 
 end
 
