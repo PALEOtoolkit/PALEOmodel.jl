@@ -74,6 +74,8 @@ Get a Vector `x` from a column of sparse matrix `A`
 
 Calculates x .= A[iA, jA::Int] where `iA` is a range of indices and `jA` specifies column.
 
+Assumes length of `x` and `iA` is small relative to number of non-zero rows in A
+
 Returns the number of non-zero elements in x
 """
 function get_column_sparse!(x::AbstractVector, A::SubArray{T, 1, <:SparseArrays.SparseMatrixCSC, <:Tuple{I1, Int}, false}) where {T, I1}
@@ -82,35 +84,172 @@ end
 
 function get_column_sparse!(x::AbstractVector, A::SparseArrays.SparseMatrixCSC, iA, jA::Int64)
     length(x) == length(iA) || throw(DimensionMismatch("x and iA are not the same length"))
-    x .= 0.0
+
+    fill!(x, 0.0)
+
+    @inbounds begin
+    idx_A_min = A.colptr[jA]
+    idx_A_max = A.colptr[jA+1]-1
+
+    idx_A_max < idx_A_min && return 0
+    A.rowval[idx_A_max] < first(iA) && return 0
+    A.rowval[idx_A_min] > last(iA) && return 0
+    end
+
+    idx_A = searchsortedfirst_range(A.rowval, last(iA), idx_A_min, idx_A_max)
+    idx_A_max = min(idx_A, idx_A_max)
 
     n_nonzero = 0
-    i = 1
-    @inbounds for idx_A in A.colptr[jA]:(A.colptr[jA+1]-1)
-        i_A = A.rowval[idx_A]
-        if i_A < first(iA)
-            continue
-        end
-        if i_A > last(iA)
-            break
-        end
-        i = _find_i(i, iA, i_A)
-        if i_A == iA[i]
+    @inbounds for (i, iv) in enumerate(iA)
+        # find index of iv in A.rowval between idx_A_min - idx_A_max
+        idx_A = searchsortedfirst_range(A.rowval, iv, idx_A_min, idx_A_max)
+        idx_A > idx_A_max && break
+        if A.rowval[idx_A] == iv
             x[i] = A.nzval[idx_A]
             n_nonzero += 1
         end
+        idx_A_min = idx_A
     end
+
     return n_nonzero
 end
 
-# find ivals[i] == iv, starting at i
-# returns i which may or may not be correct
-@inline function _find_i(i::Integer, ivals, iv)
-    @inbounds while iv > ivals[i] && i < length(ivals)
-        i += 1
+
+# Modified from searchsortedfirst in Julia base:
+# index of the first value of vector ivals in index range lo - hi that is greater than or equal to iv
+# returns lastindex(ivals)+1 if iv is greater than all values in ivals.
+function searchsortedfirst_range(ivals, iv::Integer, lo::Integer, hi::Integer)
+    hi = hi + 1
+    len = hi - lo
+    @inbounds while len != 0
+        half_len = len >>> 0x01
+        m = lo + half_len
+        if ivals[m] < iv
+            lo = m + 1
+            len -= half_len + 1
+        else
+            hi = m
+            len = half_len
+        end
     end
-    return i
+    return lo
 end
+
+"""
+    SparseVecAccum
+
+Special case of a Sparse Vector that allows accumulation of elements and subsequent sorting,
+then element access in ascending order, enforcing access of every non-zero element.
+
+Provides:
+- 'fill!(sva::SparseVecAccum, 0.0)`
+- `add_element(sva::SparseVecAccum, (value, idx))`
+- `sort!(sva::SparseVecAccum)` sort into ascending index order, eliminating duplicates
+- `get_all_nonzero_element(sva::SparseVecAccum, i, lastidx)` element access in ascending order, enforcing access
+  of every non-zero element
+"""
+struct SparseVecAccum <: AbstractVector{Float64}
+    v::Vector{Tuple{Float64, Int64}}
+end
+
+SparseVecAccum() = SparseVecAccum(Tuple{Float64, Int64}[])
+
+Base.@propagate_inbounds function add_element!(y::Vector{Float64}, (x, ix))
+    y[ix] += x
+end
+
+function add_element!(sva::SparseVecAccum, (x, ix))
+    if !iszero(x)
+        push!(sva.v, (x, ix))
+    end
+end
+
+"""
+    get_all_nonzero_element(y::SparseVectorAccum, i, lastidx) -> (y[i], lastidx)
+
+Element access, enforcing access of every (non-zero) element in ascending order
+
+Returns value of element index i in full Vector, given lastidx accessed in SparseVectorAccum.
+
+Errors if access to index `i` requires skipping a non-zero value.
+"""
+function get_all_nonzero_element(sva::SparseVecAccum, i::Integer, lastidx::Integer)
+    @inbounds begin
+    if lastidx < 1
+        error("lastidx $lastidx < 1")
+    elseif lastidx > length(sva.v)
+        return (0.0, lastidx)
+    else
+        x, ix = sva.v[lastidx]
+        if i < ix
+            return (0.0, lastidx)
+        elseif i == ix
+            return (x, lastidx)
+        else
+            lastidx += 1
+            if lastidx > length(sva.v)
+                return (0.0, lastidx)
+            else
+                x, ix = sva.v[lastidx]
+                if i < ix
+                    return (0.0, lastidx)
+                elseif i == ix
+                    return (x, lastidx)
+                else
+                    error("y[$ix] != 0")
+                end
+            end
+        end
+    end
+
+    end # @inbounds
+    return nothing
+end
+
+function Base.fill!(sva::SparseVecAccum, v)
+    iszero(v) || error("SparseVectorAccum cannot be filled with $v != 0.0")
+    resize!(sva.v, 0)
+    return sva
+end
+
+function Base.copyto!(dest::AbstractVector, src::SparseVecAccum)   
+    if !isempty(src.v)
+        x, ix = first(src.v)
+        ix >= firstindex(dest) || throw(BoundsError(dest, ix))
+        x, ix = last(src.v)
+        ix <= lastindex(dest) || throw(BoundsError(dest, ix))
+    end
+
+    fill!(dest, 0.0)
+    @inbounds for (x, ix) in src.v
+        dest[ix] += x  # += so will work on sorted and unsorted SparseVecAccum
+    end
+
+    return dest
+end
+
+function Base.sort!(sva::SparseVecAccum)
+    # sort by index
+    sort!(sva.v; lt=(x, y)->x[2]<y[2])
+    # accumulate same indices
+    nunique = 0
+    y, iy = (NaN, -1)
+    for (x, ix) in sva.v
+        if ix == iy
+            sva.v[nunique] = (x + y, ix)
+        else
+            nunique += 1
+            sva.v[nunique] = (x, ix)
+        end
+        y, iy = sva.v[nunique]
+    end
+
+    resize!(sva.v, nunique)
+
+    return sva
+end
+
+
 
 function check_all_zero(x::AbstractVector, ifrom, ito)
     num_zeros = 0
@@ -118,6 +257,58 @@ function check_all_zero(x::AbstractVector, ifrom, ito)
         num_zeros += !iszero(x[i])
     end
     num_zeros == 0 || error("x[$ifrom:$ito] != 0")
+    return nothing
+end
+
+"""
+    mult_sparse_vec!(y::AbstractVector, A::SparseMatrixCSC[iA, jA], x::AbstractVector)
+
+Calculate `y .= A[iA, jA] * x`, where `iA` and `jA` are index ranges defining a part of `A`
+
+`iA` is assumed large relative to number of non-zero rows in `A`
+"""
+function mult_sparse_vec!(y::AbstractVector, A::SubArray{T, 2, <:SparseArrays.SparseMatrixCSC, I, false}, x::AbstractVector) where {T, I}
+    return mult_sparse_vec!(y, parent(A), A.indices[1], A.indices[2], x)
+end
+
+function mult_sparse_vec!(y::AbstractVector, A::SparseArrays.SparseMatrixCSC, iA, jA, x::AbstractVector)
+    isa(y, SparseUtils.SparseVecAccum) || length(iA) == length(y) || throw(DimensionMismatch("length(iA) != length(y)"))
+    length(jA) == length(x) || throw(DimensionMismatch("length(jA) != length(x)"))
+
+    fill!(y, 0.0)
+
+    @inbounds for (j, j_A) in enumerate(jA)
+        i = 1
+        for idx_A in A.colptr[j_A]:(A.colptr[j_A+1]-1)
+            i_A = A.rowval[idx_A]
+            # find index of i_A in iA
+            i = searchsortedfirst_range(iA, i_A, i, length(iA))
+            i = min(i, length(iA))
+            if i_A == iA[i]
+                add_element!(y, (A.nzval[idx_A]*x[j], i))
+            end
+            
+        end
+    end
+    return nothing
+end
+
+function mult_sparse_vec!(y::AbstractVector, A::SparseArrays.SparseMatrixCSC, iA::UnitRange, jA, x::AbstractVector)
+    isa(y, SparseUtils.SparseVecAccum) || length(iA) == length(y) || throw(DimensionMismatch("length(iA) != length(y)"))
+    length(jA) == length(x) || throw(DimensionMismatch("length(jA) != length(x)"))
+
+    fill!(y, 0.0)
+
+    @inbounds for (j, j_A) in enumerate(jA)
+        i = 1
+        for idx_A in A.colptr[j_A]:(A.colptr[j_A+1]-1)
+            i_A = A.rowval[idx_A]
+            if i_A >= first(iA) && i_A <= last(iA)
+                i = i_A - first(iA) + 1
+                add_element!(y, (A.nzval[idx_A]*x[j], i))
+            end            
+        end
+    end
     return nothing
 end
 
@@ -141,53 +332,24 @@ function add_column_sparse_fixed!(A::SparseArrays.SparseMatrixCSC, jA::Int64, y:
         last_i = i
     end
     check_all_zero(y, last_i+1, length(y))
-
-    # idx_A = A.colptr[jA]
-    # i_A = A.rowval[idx_A]
-    # @inbounds for (i_y, y) in zip(eachindex(y), y)
-    #     if !iszero(y)
-    #         while i_A != i_y && idx_A < A.colptr[jA+1]
-    #             idx_A +=1
-    #             i_A = A.rowval[idx_A]
-    #         end
-    #         i_A == i_y || error("element y[$i_y] in y is not present in A[:, $jA]")
-    #         A.nzval[idx_A] += y
-    #     end    
-    # end
     
     return A
 end
 
-"""
-    mult_sparse_vec!(y::AbstractVector, A::SparseMatrixCSC[iA, jA], x::AbstractVector)
+function add_column_sparse_fixed!(A::SparseArrays.SparseMatrixCSC, jA::Int64, y::SparseVecAccum)
 
-Calculate `y .= A[iA, jA] * x`, where `iA` and `jA` are index ranges defining a part of `A`
-"""
-function mult_sparse_vec!(y::AbstractVector, A::SubArray{T, 2, <:SparseArrays.SparseMatrixCSC, I, false}, x::AbstractVector) where {T, I}
-    return mult_sparse_vec!(y, parent(A), A.indices[1], A.indices[2], x)
-end
-
-function mult_sparse_vec!(y::AbstractVector, A::SparseArrays.SparseMatrixCSC, iA, jA, x::AbstractVector)
-    length(iA) == length(y) || throw(DimensionMismatch("length(iA) != length(y)"))
-    length(jA) == length(x) || throw(DimensionMismatch("length(jA) != length(x)"))
-
-    y .= 0.0
-
-    @inbounds for (j, j_A) in enumerate(jA)
-        i = 1
-        for idx_A in A.colptr[j_A]:(A.colptr[j_A+1]-1)
-            i_A = A.rowval[idx_A]
-            i = _find_i(i, iA, i_A)
-            if i_A == iA[i]
-                y[i] += A.nzval[idx_A]*x[j]
-            end
-            
-        end
+    sort!(y)
+    last_idx = 1
+    @inbounds for idx_A in A.colptr[jA]:(A.colptr[jA+1]-1)
+        i = A.rowval[idx_A]
+        (v, last_idx) = get_all_nonzero_element(y, i, last_idx)
+        A.nzval[idx_A] += v
     end
-    return nothing
+    # check no non-zero elements left
+    get_all_nonzero_element(y, typemax(last_idx),  last_idx)
+    
+    return A
 end
-
-
 
 """
     get_sparse_inverse(A::AbstractMatrix) -> A_inv::SparseArrays.SparseMatrixCSC
