@@ -14,6 +14,7 @@ import ..ODE
 import ..JacobianAD
 import ..SplitDAE
 
+import TimerOutputs: @timeit
 
 ##############################################################
 # Solve for steady state using NLsolve.jl
@@ -311,6 +312,7 @@ function steadystate_ptc_splitdae(
 )
     PB.check_modeldata(run.model, modeldata)
 
+    @timeit "create_split_dae" begin
     ms, initial_state_outer, jacouter_prototype = SplitDAE.create_split_dae(
         run.model, initial_state, modeldata; 
         jac_cellranges=jac_cellranges,
@@ -321,9 +323,10 @@ function steadystate_ptc_splitdae(
         inner_jac_ad=inner_jac_ad, 
         inner_kwargs=inner_kwargs,
     )
-
+    end # timeit
     nlsolveF = nlsolveF_SplitPTC(ms, initial_state_outer, jacouter_prototype)
 
+    @timeit "solve_ptc" begin
     solve_ptc(
         run, initial_state_outer, nlsolveF, tspan, deltat_initial;
         deltat_fac=deltat_fac,
@@ -336,6 +339,7 @@ function steadystate_ptc_splitdae(
         verbose=verbose,
         BLAS_num_threads=BLAS_num_threads,
     )
+    end # timeit
 
     return nothing    
 end

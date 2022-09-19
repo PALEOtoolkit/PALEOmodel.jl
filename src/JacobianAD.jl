@@ -16,6 +16,8 @@ import SparseArrays
 import SparseDiffTools
 import SparsityTracing
 
+import TimerOutputs: @timeit
+
 # moved to SolverFunctions
 # Base.@deprecate_binding DerivForwardDiff  SolverFunctions.DerivForwardDiff
 # Base.@deprecate_binding JacODEForwardDiffDense  .. etc
@@ -75,7 +77,7 @@ function jac_config_ode(
  
         jacconf = ForwardDiff.JacobianConfig(nothing, state_sms_vars_data, state_vars_data, chunk)
         _, modeldata_ad = Logging.with_logger(init_logger) do
-            PALEOmodel.initialize!(model, eltype=eltype(jacconf))
+            PALEOmodel.initialize!(model, eltype=eltype(jacconf), create_dispatchlists_all=false)
         end
         jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
 
@@ -100,21 +102,26 @@ function jac_config_ode(
             throw(ArgumentError("jac_ad_t_sparsity must be supplied for Jacobian $jac_ad"))
         # Use SparsityTracing to calculate sparsity pattern
         @info "  using ForwardDiff sparse Jacobian with sparsity calculated at t=$jac_ad_t_sparsity"  
+        @timeit "calcJacobianSparsitySparsityTracing!" begin
         _, jac_proto_unfilled = calcJacobianSparsitySparsityTracing!(
             model, initial_state, jac_ad_t_sparsity,
             jac_cellranges=jac_cellranges, init_logger=init_logger,
         ) 
+        end # timeit
         jac_prototype = SparseUtils.fill_sparse_jac(jac_proto_unfilled; fill_diagonal=fill_jac_diagonal)
         # println("using jac_prototype: ", jac_prototype)
        
         colorvec = SparseDiffTools.matrix_colors(jac_prototype)
 
         chunksize = ForwardDiff.pickchunksize(maximum(colorvec), request_adchunksize)
+        @timeit "modeldata_ad initialize!" begin
         _, modeldata_ad = Logging.with_logger(init_logger) do
-            PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize})
+            PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize}, create_dispatchlists_all=false)
         end
+        end # timeit
+        @timeit "jac_dispatchlists" begin
         jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
-        
+        end # timeit
         @info "  jac_prototype nnz=$(SparseArrays.nnz(jac_prototype)) num colors=$(maximum(colorvec)) "*
             "chunksize=$chunksize)"    
 
@@ -125,7 +132,7 @@ function jac_config_ode(
             sparsity = copy(jac_prototype)
         )
 
-        jac = SolverFunctions.JacODEForwardDiffSparse(
+        @timeit "JacODEForwardDiffSparse" jac = SolverFunctions.JacODEForwardDiffSparse(
             modeldata_ad, 
             modeldata_ad.solver_view_all, # use all Variables in model
             jac_dispatchlists, # use only Reactions specified
@@ -184,7 +191,7 @@ function jac_config_dae(
       
         jacconf = ForwardDiff.JacobianConfig(nothing, state_sms_vars_data, state_vars_data, chunk)
         _, modeldata_ad = Logging.with_logger(init_logger) do 
-            PALEOmodel.initialize!(model, eltype=eltype(jacconf))
+            PALEOmodel.initialize!(model, eltype=eltype(jacconf), create_dispatchlists_all=false)
         end
         jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
 
@@ -261,7 +268,7 @@ function jac_config_dae(
 
         chunksize = ForwardDiff.pickchunksize(maximum(colorvec), request_adchunksize)
         _, modeldata_ad = Logging.with_logger(init_logger) do
-            PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize})
+            PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize}, create_dispatchlists_all=false)
         end
         jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
       
@@ -385,32 +392,34 @@ function calcJacobianSparsitySparsityTracing!(
 
     @info "calcJacobianSparsitySparsityTracing!"
     # Jacobian setup
-    initial_state_ad = SparsityTracing.create_advec(initial_state)
-    _, modeldata_ad = Logging.with_logger(init_logger) do
-        PALEOmodel.initialize!(model, eltype=eltype(initial_state_ad))
+    initial_state_adst = SparsityTracing.create_advec(initial_state)
+    @timeit "initialize! modeldata_adst" begin
+    _, modeldata_adst = Logging.with_logger(init_logger) do
+        PALEOmodel.initialize!(model, eltype=eltype(initial_state_adst), create_dispatchlists_all=false)
     end
+    end # timeit
     
-    PALEOmodel.set_statevar!(modeldata_ad.solver_view_all, initial_state_ad) # fix up modeldata_ad initial_state, as derivative information missing
+    PALEOmodel.set_statevar!(modeldata_adst.solver_view_all, initial_state_adst) # fix up modeldata_adst initial_state, as derivative information missing
     
-    PALEOmodel.set_tforce!(modeldata_ad.solver_view_all, tjacsparsity)
+    PALEOmodel.set_tforce!(modeldata_adst.solver_view_all, tjacsparsity)
 
     if isnothing(jac_cellranges)
         # Jacobian for whole model
-        jac_cellranges = modeldata_ad.cellranges_all
-        jac_dispatchlists = modeldata_ad.dispatchlists_all
-    else
-        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
+        jac_cellranges = modeldata_adst.cellranges_all
     end
+    @timeit "jac_dispatchlists" begin
+    jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_adst, jac_cellranges)
+    end # timeit
 
     @info "calcJacobianSparsitySparsityTracing! do_deriv"
-    @time PB.do_deriv(jac_dispatchlists)
+    @timeit "do_deriv" PB.do_deriv(jac_dispatchlists)
 
-    state_sms_vars_data = PALEOmodel.get_statevar_sms(modeldata_ad.solver_view_all)                                  
-    @time initial_jac = SparsityTracing.jacobian(state_sms_vars_data, length(initial_state))
+    state_sms_vars_data = PALEOmodel.get_statevar_sms(modeldata_adst.solver_view_all)                                  
+    @timeit "initial_jac" initial_jac = SparsityTracing.jacobian(state_sms_vars_data, length(initial_state))
     @info "calcJacobianSparsitySparsityTracing!  initial_jac size=$(size(initial_jac)) "*
         "nnz=$(SparseArrays.nnz(initial_jac)) non-zero=$(count(!iszero, initial_jac)) at time=$tjacsparsity"  
 
-    return (modeldata_ad, initial_jac)
+    return (modeldata_adst, initial_jac)
 end
 
 

@@ -78,35 +78,36 @@ function initialize!(
         ) : 
         nothing,
     expect_hostdep_varnames=["global.tforce"],
+    create_dispatchlists_all=true,
 )
 
     modeldata = PB.create_modeldata(model, eltype, threadsafe=threadsafe)
    
     # Allocate variables
-    PB.allocate_variables!(model, modeldata, eltypemap=eltypemap)
+    @timeit "allocate_variables" PB.allocate_variables!(model, modeldata, eltypemap=eltypemap)
 
     # check all variables allocated
     PB.check_ready(model, modeldata, expect_hostdep_varnames=expect_hostdep_varnames)
 
     # Create modeldata.solver_view_all for the entire model
-    set_default_solver_view!(model, modeldata)    
+    @timeit "set_default_solver_view!" set_default_solver_view!(model, modeldata)    
 
     # Initialize model Reaction data arrays (calls ReactionMethod.preparefn)
     # Set modeldata.dispatchlists_all for the entire model
-    PB.initialize_reactiondata!(model, modeldata, method_barrier=method_barrier)
+    @timeit "initialize_reactiondata" PB.initialize_reactiondata!(model, modeldata, method_barrier=method_barrier, create_dispatchlists_all=create_dispatchlists_all)
 
     # check Reaction configuration
     PB.check_configuration(model)
 
     # Initialise Reactions and non-state Variables
-    PB.dispatch_setup(model, :setup, modeldata)
+    @timeit "dispatch_setup :setup" PB.dispatch_setup(model, :setup, modeldata)
 
     # Initialise state variables to norm_value
-    PB.dispatch_setup(model, :norm_value, modeldata)
+    @timeit "dispatch_setup :norm_value" PB.dispatch_setup(model, :norm_value, modeldata)
     PALEOmodel.copy_norm!(modeldata.solver_view_all)
 
     # Initialise state variables etc     
-    PB.dispatch_setup(model, :initial_value, modeldata)
+    @timeit "dispatch_setup :initial_value" PB.dispatch_setup(model, :initial_value, modeldata)
 
     if !isnothing(pickup_output)
         pickup_record = length(pickup_output)
