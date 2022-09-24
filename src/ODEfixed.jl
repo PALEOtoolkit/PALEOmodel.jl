@@ -342,13 +342,14 @@ function create_timestep_Euler_ctxt(
     solver_view=modeldata.solver_view_all,
     n_substep=1,
     verbose=false,
+    generated_dispatch=true,
 )
     PB.check_modeldata(model, modeldata)
 
     num_constraints = PALEOmodel.num_algebraic_constraints(solver_view)
     iszero(num_constraints) || error("DAE problem with $num_constraints algebraic constraints")
 
-    dispatch_lists = PB.create_dispatch_methodlists(model, modeldata, cellranges, verbose=false)
+    dispatch_lists = PB.create_dispatch_methodlists(model, modeldata, cellranges; verbose, generated_dispatch)
 
     return (dispatch_lists, solver_view, n_substep)
 end

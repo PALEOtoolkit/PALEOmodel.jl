@@ -6,7 +6,7 @@ import PALEOboxes as PB
 import ForwardDiff
 import SparsityTracing
 
-using TimerOutputs: @timeit
+import TimerOutputs: @timeit, @timeit_debug
 
 # Get scalar value from variable x (discarding any AD derivatives)
 PB.value_ad(x::SparsityTracing.ADval) = SparsityTracing.value(x)

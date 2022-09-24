@@ -184,6 +184,7 @@ function create_timestep_LocalImplicit_ctxt(
     niter_max,
     Lnorm_inf_max,
     request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
+    generated_dispatch=true,
     init_logger=Logging.NullLogger(),
 )
     PB.check_modeldata(model, modeldata)
@@ -230,7 +231,7 @@ function create_timestep_LocalImplicit_ctxt(
     @info "  using ForwardDiff dense Jacobian chunksize=$chunksize"
 
     _, modeldata_ad = Logging.with_logger(init_logger) do
-        PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize})
+        PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize}; create_dispatchlists_all=false)
     end
  
     # temporarily replace modeldata with norm so can read back per-cell norms
@@ -259,7 +260,7 @@ function create_timestep_LocalImplicit_ctxt(
         statevar_norm = PALEOmodel.get_statevar_norm(sv)
         push!(statevar_norms, statevar_norm)        
         
-        dl = PB.create_dispatch_methodlists(model, modeldata, [cellrange])
+        dl = PB.create_dispatch_methodlists(model, modeldata, [cellrange]; generated_dispatch)
         push!(dispatchlists, dl)
 
         sv_ad = PALEOmodel.create_solver_view(
@@ -270,7 +271,7 @@ function create_timestep_LocalImplicit_ctxt(
         )
         push!(solverviews_ad, sv_ad)
        
-        dl_ad = PB.create_dispatch_methodlists(model, modeldata_ad, [cellrange])
+        dl_ad = PB.create_dispatch_methodlists(model, modeldata_ad, [cellrange]; generated_dispatch)
 
         push!(dispatchlists_ad, dl_ad)
 

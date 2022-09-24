@@ -16,7 +16,7 @@ import SparseArrays
 import SparseDiffTools
 import SparsityTracing
 
-import TimerOutputs: @timeit
+import TimerOutputs: @timeit, @timeit_debug
 
 # moved to SolverFunctions
 # Base.@deprecate_binding DerivForwardDiff  SolverFunctions.DerivForwardDiff
@@ -34,27 +34,32 @@ import TimerOutputs: @timeit
 """
     jac_config_ode(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity;
-        [request_adchunksize] [, jac_cellranges] [, init_logger]
-    )-> (jac, jac_prototype)
+    )-> (jac, jac_prototype::SparseMatrixCSC)
 
-Create and return `jac` (ODE Jacobian function object), and `jac_prototype` (sparsity pattern, or `nothing` for dense Jacobian)
+Create and return `jac` (ODE Jacobian function object), and `jac_prototype` (sparsity pattern as `SparseMatrixCSC`, or `nothing` for dense Jacobian)
 
 `jac_ad` defines Jacobian type (:ForwardDiffSparse, :ForwardDiff)
 
 Sets up `modeldata_ad` with appropriate datatypes for ForwardDiff AD Dual numbers,
 sets up cache for ForwardDiff, calculates Jacobian sparsity (if required) at time  `jac_ad_t_sparsity`.
 
-If `jac_cellranges` is supplied, Jacobian is restricted to this subset of Domains and Reactions (via operatorID).
-
 NB: there is a profusion of different Julia APIs here:
 - ForwardDiff Sparse and dense Jacobian use different APIs and have different cache setup requirements.
 - ForwardDiff requires f!(du, u) hence a closure or function object, DifferentialEquations allows context objects to be passed around.
+
+# Keyword arguments
+- `jac_cellranges=modeldata.cellranges_all`: restrict Jacobian to this subset of Domains and Reactions (via operatorID).
+- `request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD`:  chunk size for `ForwardDiff` automatic differentiation
+- `fill_jac_diagonal=true`: (`jac=:ForwardDiffSparse` only) true to fill diagonal of `jac_prototype`
+- `generated_dispatch=true`: `true` to autogenerate code for dispatch (fast dispatch, slow compile)
+- `init_logger=Logging.NullLogger()`: logger to use when generating modeldata with AD types.
 """
 function jac_config_ode(
     jac_ad::Symbol, model::PB.Model, initial_state, modeldata, jac_ad_t_sparsity;
-    request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     jac_cellranges=modeldata.cellranges_all,
+    request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     fill_jac_diagonal=true,
+    generated_dispatch=true,
     init_logger=Logging.NullLogger(),
 )
     @info "jac_config_ode: jac_ad=$jac_ad"
@@ -79,7 +84,7 @@ function jac_config_ode(
         _, modeldata_ad = Logging.with_logger(init_logger) do
             PALEOmodel.initialize!(model, eltype=eltype(jacconf), create_dispatchlists_all=false)
         end
-        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
+        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges; generated_dispatch)
 
         @info "  using ForwardDiff dense Jacobian chunksize=$(ForwardDiff.chunksize(chunk)))"
      
@@ -120,7 +125,7 @@ function jac_config_ode(
         end
         end # timeit
         @timeit "jac_dispatchlists" begin
-        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
+        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges; generated_dispatch)
         end # timeit
         @info "  jac_prototype nnz=$(SparseArrays.nnz(jac_prototype)) num colors=$(maximum(colorvec)) "*
             "chunksize=$chunksize)"    
@@ -160,13 +165,14 @@ end
         kwargs...
     ) -> (jac, jac_prototype, odeimplicit)
 
-See [`jac_config_ode`](@ref) for parameters.
+See [`jac_config_ode`](@ref) for keyword arguments.
 """
 function jac_config_dae(
     jac_ad::Symbol, model::PB.Model, initial_state, modeldata, jac_ad_t_sparsity;
     request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     jac_cellranges=modeldata.cellranges_all,
     implicit_cellranges=modeldata.cellranges_all,
+    generated_dispatch=true,
     init_logger=Logging.NullLogger(),
 )
     @info "jac_config_dae: jac_ad=$jac_ad"
@@ -193,7 +199,7 @@ function jac_config_dae(
         _, modeldata_ad = Logging.with_logger(init_logger) do 
             PALEOmodel.initialize!(model, eltype=eltype(jacconf), create_dispatchlists_all=false)
         end
-        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
+        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges; generated_dispatch)
 
         if iszero(PALEOmodel.num_total(modeldata.solver_view_all))
             odeimplicit = nothing     
@@ -207,7 +213,7 @@ function jac_config_dae(
                 nothing, duds_template, state_vars_data, chunk,
             )
 
-            implicit_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, implicit_cellranges)
+            implicit_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, implicit_cellranges; generated_dispatch)
             odeimplicit = SolverFunctions.ImplicitForwardDiffDense(modeldata_ad, sv_ad, implicit_dispatchlists, duds_template, implicitconf, duds)
         end
 
@@ -270,7 +276,7 @@ function jac_config_dae(
         _, modeldata_ad = Logging.with_logger(init_logger) do
             PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize}, create_dispatchlists_all=false)
         end
-        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges)
+        jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_ad, jac_cellranges; generated_dispatch)
       
         if iszero(PALEOmodel.num_total(modeldata.solver_view_all))
             
@@ -288,7 +294,7 @@ function jac_config_dae(
             
             sv_ad = modeldata_ad.solver_view_all
             implicit_dispatchlists = PB.create_dispatch_methodlists(
-                model, modeldata_ad, implicit_cellranges
+                model, modeldata_ad, implicit_cellranges; generated_dispatch
             )
             odeimplicit = SolverFunctions.ImplicitForwardDiffSparse(
                 modeldata_ad, sv_ad, implicit_dispatchlists, implicit_cache, duds
@@ -408,7 +414,7 @@ function calcJacobianSparsitySparsityTracing!(
         jac_cellranges = modeldata_adst.cellranges_all
     end
     @timeit "jac_dispatchlists" begin
-    jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_adst, jac_cellranges)
+    jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_adst, jac_cellranges; generated_dispatch=false)
     end # timeit
 
     @info "calcJacobianSparsitySparsityTracing! do_deriv"
@@ -442,7 +448,7 @@ function calcImplicitSparsitySparsityTracing!(
 
     PALEOmodel.set_tforce!(modeldata_sparsitytracing.solver_view_all, tsparsity)
 
-    implicit_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_sparsitytracing, implicit_cellranges)
+    implicit_dispatchlists = PB.create_dispatch_methodlists(model, modeldata_sparsitytracing, implicit_cellranges; generated_dispatch=false)
 
     PB.do_deriv(implicit_dispatchlists)
 
@@ -462,6 +468,7 @@ end
 function directional_config(
     model::PB.Model, directional_cellranges;
     eltypestomap=String[],
+    generated_dispatch=true,
     init_logger=Logging.NullLogger(),
 )
 
@@ -477,7 +484,7 @@ function directional_config(
     end
 
     directional_dispatchlists = PB.create_dispatch_methodlists(
-        model, directional_modeldata_ad, directional_cellranges
+        model, directional_modeldata_ad, directional_cellranges; generated_dispatch
     )
 
     directional_sv = directional_modeldata_ad.solver_view_all

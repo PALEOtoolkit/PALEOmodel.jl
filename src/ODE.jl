@@ -51,6 +51,7 @@ function ODEfunction(
     initial_state=nothing,
     jac_ad_t_sparsity=nothing,    
     init_logger=Logging.NullLogger(),
+    generated_dispatch=true,
 )
     PB.check_modeldata(model, modeldata)
 
@@ -72,11 +73,11 @@ function ODEfunction(
     @info "ODEfunction: using Jacobian $jac_ad"
        
     jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
-        jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity, 
-        init_logger=init_logger,
+        jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity;
+        init_logger, generated_dispatch,
     )    
     
-    f = SciMLBase.ODEFunction{true}(m, jac=jac, jac_prototype=jac_prototype, mass_matrix=M)
+    f = SciMLBase.ODEFunction{true}(m; jac, jac_prototype, mass_matrix=M)
        
     return f
 end
@@ -101,18 +102,19 @@ function DAEfunction(
     initial_state=nothing,
     jac_ad_t_sparsity=nothing,    
     init_logger=Logging.NullLogger(),
+    generated_dispatch=true,
 )
     @info "DAEfunction:  using Jacobian $jac_ad"
 
     PB.check_modeldata(model, modeldata)
     
     jac, jac_prototype, odeimplicit = PALEOmodel.JacobianAD.jac_config_dae(
-        jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity,
-        init_logger=init_logger,
+        jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity;
+        init_logger, generated_dispatch,
     )
     m =  SolverFunctions.ModelDAE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, odeimplicit, 0)
     
-    f = SciMLBase.DAEFunction{true}(m, jac=jac, jac_prototype=jac_prototype)  
+    f = SciMLBase.DAEFunction{true}(m; jac, jac_prototype)  
 
     return f
 end
@@ -160,6 +162,7 @@ and then
   (not recommended, see [`PALEOmodel.SteadyState.steadystate`](@ref)).
 - `BLAS_num_threads=1`: number of LinearAlgebra.BLAS threads to use
 - `init_logger=Logging.NullLogger()`: default value omits logging from (re)initialization to generate Jacobian modeldata, Logging.CurrentLogger() to include
+- `generated_dispatch=true`: `true` to autogenerate code (fast solve, slow compile)
 """
 function integrate(
     run, initial_state, modeldata, tspan; 
@@ -171,14 +174,16 @@ function integrate(
     steadystate=false,
     BLAS_num_threads=1,
     init_logger=Logging.NullLogger(),
+    generated_dispatch=true,
 )
   
     f = ODEfunction(
         run.model, modeldata;   
-        jac_ad=jac_ad,
-        initial_state=initial_state,
-        jac_ad_t_sparsity=jac_ad_t_sparsity,    
-        init_logger=init_logger,
+        jac_ad,
+        initial_state,
+        jac_ad_t_sparsity,    
+        init_logger,
+        generated_dispatch,
     )
  
     io = IOBuffer()
@@ -218,9 +223,9 @@ function integrateForwardDiff(
 
     return integrate(
         run, initial_state, modeldata, tspan;
-        alg=alg,
-        jac_ad=jac_ad,
-        jac_ad_t_sparsity=jac_ad_t_sparsity,
+        alg,
+        jac_ad,
+        jac_ad_t_sparsity,
         kwargs...
     )
 end
@@ -265,14 +270,16 @@ function integrateDAE(
     jac_ad_t_sparsity=tspan[1],
     BLAS_num_threads=1,
     init_logger=Logging.NullLogger(),
+    generated_dispatch=true,
 )
     
     func = DAEfunction(
         run.model, modeldata;   
-        jac_ad=jac_ad,
-        initial_state=initial_state,
-        jac_ad_t_sparsity=jac_ad_t_sparsity,    
-        init_logger=init_logger,
+        jac_ad,
+        initial_state,
+        jac_ad_t_sparsity,    
+        init_logger,
+        generated_dispatch,
     )
    
     differential_vars = PALEOmodel.state_vars_isdifferential(modeldata.solver_view_all)
@@ -283,8 +290,8 @@ function integrateDAE(
     )
 
     prob = SciMLBase.DAEProblem(
-        func, initial_deriv, initial_state, tspan, nothing,
-        differential_vars=differential_vars,
+        func, initial_deriv, initial_state, tspan, nothing;
+        differential_vars,
     )
 
     io = IOBuffer()
@@ -317,9 +324,9 @@ function integrateDAEForwardDiff(
 
     return integrateDAE(
         run, initial_state, modeldata, tspan;
-        alg=alg,
-        jac_ad=jac_ad,
-        jac_ad_t_sparsity=jac_ad_t_sparsity,
+        alg,
+        jac_ad,
+        jac_ad_t_sparsity,
         kwargs...
     )
 end
