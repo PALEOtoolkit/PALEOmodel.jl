@@ -64,6 +64,9 @@ and supplying `method_barrier` (a thread barrier to add to `ReactionMethod` disp
 - `threadsafe=false`: true to create thread safe Atomic Variables where Variable attribute `:atomic==true`
 - `method_barrier=nothing`: thread barrier to add to dispatch lists if `threadsafe==true`
 - `expect_hostdep_varnames=["global.tforce"]`: non-state-Variable host-dependent Variable names expected
+- `create_solver_view_all=true`: `true` to create `modeldata.solver_view_all`
+- `create_dispatchlists_all=true`: `true` to create `modeldata.dispatchlists_all`
+- `generated_dispatch=true`: `true` to autogenerate code for `modeldata.dispatchlists_all` (fast dispatch, slow compile)
 """
 function initialize!(
     model::PB.Model; 
@@ -78,23 +81,30 @@ function initialize!(
         ) : 
         nothing,
     expect_hostdep_varnames=["global.tforce"],
+    create_solver_view_all=true,
     create_dispatchlists_all=true,
+    generated_dispatch=true,
 )
 
-    modeldata = PB.create_modeldata(model, eltype, threadsafe=threadsafe)
+    modeldata = PB.create_modeldata(model, eltype; threadsafe)
    
     # Allocate variables
-    @timeit "allocate_variables" PB.allocate_variables!(model, modeldata, eltypemap=eltypemap)
+    @timeit "allocate_variables" PB.allocate_variables!(model, modeldata; eltypemap)
 
     # check all variables allocated
-    PB.check_ready(model, modeldata, expect_hostdep_varnames=expect_hostdep_varnames)
+    PB.check_ready(model, modeldata; expect_hostdep_varnames)
 
     # Create modeldata.solver_view_all for the entire model
-    @timeit "set_default_solver_view!" set_default_solver_view!(model, modeldata)    
+    if create_solver_view_all
+        @timeit "set_default_solver_view!" set_default_solver_view!(model, modeldata)
+    end
 
     # Initialize model Reaction data arrays (calls ReactionMethod.preparefn)
     # Set modeldata.dispatchlists_all for the entire model
-    @timeit "initialize_reactiondata" PB.initialize_reactiondata!(model, modeldata, method_barrier=method_barrier, create_dispatchlists_all=create_dispatchlists_all)
+    @timeit "initialize_reactiondata" PB.initialize_reactiondata!(
+        model, modeldata;
+        method_barrier, create_dispatchlists_all, generated_dispatch
+    )
 
     # check Reaction configuration
     PB.check_configuration(model)

@@ -124,7 +124,7 @@ function kin_create(
     #   see: https://github.com/JuliaLang/julia/issues/2554
     userfun = UserFunctionAndData(f, psetupfun, psolvefun, jvfun, userdata)
 
-    return _kin_create(userfun, y0; linear_solver=linear_solver, jac_upper=jac_upper, jac_lower=jac_lower, krylov_dim=krylov_dim)
+    return _kin_create(userfun, y0; linear_solver, jac_upper, jac_lower, krylov_dim)
 end
 
 function _kin_create(
@@ -217,8 +217,12 @@ function kin_solve(
 
     flag = Sundials.@checkflag Sundials.KINSetNoInitSetup(kmem, noInitSetup) true
 
-    ## Solve problem    
-    returnflag = Sundials.KINSol(kmem, y, strategy, y_scale, f_scale)
+    ## Solve problem
+    # TODO GC.@preserve workaround for Sundials.jl issue
+    y_nv, y_scale_nv, f_scale_nv = Sundials.NVector(y), Sundials.NVector(y_scale), Sundials.NVector(f_scale)
+    GC.@preserve y_nv y_scale_nv f_scale_nv begin
+        returnflag = Sundials.KINSol(kmem, y_nv, strategy, y_scale_nv, f_scale_nv)
+    end
 
     ## Get stats
     nfevals = [0]

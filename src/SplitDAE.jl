@@ -11,7 +11,7 @@ import SparseDiffTools
 import Infiltrator
 using Logging
 import StaticArrays
-using TimerOutputs: @timeit
+import TimerOutputs: @timeit, @timeit_debug
 
 import NLsolve
 import ..SolverFunctions
@@ -31,6 +31,7 @@ import ..SparseUtils
         inner_jac_ad=:ForwardDiff: # form of automatic differentiation to use for Jacobian for inner solver (options `:ForwardDiff`, `:ForwardDiffSparse`)
         init_logger=Logging.NullLogger(),
         inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
+        generated_dispatch=true,
     ) -> (ms::ModelSplitDAE, initial_state_outer, jac_outer_prototype)
 
 Given a model that contains both ODE variables and algebraic constraints, creates a callable struct `ms::`[`ModelSplitDAE`](@ref)
@@ -63,6 +64,7 @@ function create_split_dae(
     inner_jac_ad=:ForwardDiff,
     init_logger=Logging.NullLogger(),
     inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
+    generated_dispatch=true,
 )
 
     PB.check_modeldata(model, modeldata)
@@ -85,8 +87,10 @@ function create_split_dae(
     !iszero(PALEOmodel.num_algebraic_constraints(sva)) || error("no algebraic constraints present")
 
     # dispatch list to recalculate derivative after inner solve. Could exclude costly Reactions (eg radiative transfer)
-    @timeit "dispatchlists_recalc_deriv" dispatchlists_recalc_deriv = PB.create_dispatch_methodlists(model, modeldata, jac_cellranges)
+    @timeit "dispatchlists_recalc_deriv" begin
+    dispatchlists_recalc_deriv = PB.create_dispatch_methodlists(model, modeldata, jac_cellranges; generated_dispatch)
     # dispatchlists_recalc_deriv = nothing # disable
+    end # timeit
 
     # Variable aggegators for 'outer' ODE variables only
     va_stateexplicit = sva.stateexplicit
@@ -141,7 +145,7 @@ function create_split_dae(
         copyto!(cell_initial_state, va_cell_state)
         push!(cellinitialstates, cell_initial_state)
         # dispatchlists for this cell
-        va_cell_dl = PB.create_dispatch_methodlists(model, modeldata, [cellrange])
+        va_cell_dl = PB.create_dispatch_methodlists(model, modeldata, [cellrange]; generated_dispatch)
         push!(cellderivs, ModelDerivCell(n_inner_solve, modeldata, va_cell_state, va_cell_constraints, va_cell_dl, cellworksp))
        
         # index in full model for per-cell Variables
@@ -157,10 +161,11 @@ function create_split_dae(
     @info "create_split_dae:  creating full Jacobian using :ForwardDiffSparse"
     @timeit "jacfull" begin
     jacfull, jacfull_prototype = PALEOmodel.JacobianAD.jac_config_ode(
-        :ForwardDiffSparse, model, initial_state, modeldata, tss_jac_sparsity,
-        request_adchunksize=request_adchunksize,
-        jac_cellranges=jac_cellranges,
+        :ForwardDiffSparse, model, initial_state, modeldata, tss_jac_sparsity;
+        request_adchunksize,
+        jac_cellranges,
         fill_jac_diagonal=false,
+        generated_dispatch,
     )
     end # timeit
     @info "create_split_dae:  Variables to be copied from 'modeldata' before full Jacobian calculation:"
@@ -264,7 +269,7 @@ function create_split_dae(
 
     @timeit "modeldata_jaccell initialize!" begin
     _, modeldata_jaccell = Logging.with_logger(init_logger) do
-        PALEOmodel.initialize!(model, eltype=eltype_jaccell, create_dispatchlists_all=false)
+        PALEOmodel.initialize!(model; eltype=eltype_jaccell, create_dispatchlists_all=false)
     end
     end # timeit
     va_stateexplicit_jaccell = modeldata_jaccell.solver_view_all.stateexplicit
@@ -290,7 +295,7 @@ function create_split_dae(
         vars_cellranges = fill(cellrange, n_inner_solve)
         va_cell_state_jaccell = PB.VariableAggregator(va_state.vars, vars_cellranges, modeldata_jaccell)
         va_cell_constraints_jaccell = PB.VariableAggregator(va_constraints.vars, vars_cellranges, modeldata_jaccell)
-        va_cell_dl_jaccell = PB.create_dispatch_methodlists(model, modeldata_jaccell, [cellrange])
+        va_cell_dl_jaccell = PB.create_dispatch_methodlists(model, modeldata_jaccell, [cellrange]; generated_dispatch)
 
         # function object to calculate constraints, with appropriate Dual number element type
         constraintscell = ModelDerivCell(
