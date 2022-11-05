@@ -7,15 +7,18 @@ import Infiltrator
 
 
 """
-    PlotPager(layout, [, kwargs=NamedTuple()])
+    PlotPager(layout [, kwargs=NamedTuple()][; displayfunc=(plot, nplot)->display(plot)])
 
 Accumulate plots into subplots.
 
 `layout` is supplied to `Plots.jl` `layout` keyword, may be an Int or a Tuple (ny, nx),
 see <https://docs.juliaplots.org/latest/>.
 
-Optional `kwargs::NamedTuple` provides additional keyword arguments passed through to `plot`
+Optional argument `kwargs::NamedTuple` provides additional keyword arguments passed through to `plot`
 (eg `(legend_background_color=nothing, )` to set all subplot legends to transparent backgrounds)
+
+Optional keyword argument `displayfunc::(plot, nplot)->display(plot)` provides the function used to display a screen of plots,
+where `plot` is a Plot object and `nplot::Integer` is the sequential number of this screen.
 
 # Usage
 
@@ -23,6 +26,8 @@ Optional `kwargs::NamedTuple` provides additional keyword arguments passed throu
     julia> pp(plot(1:3))  # Accumulate
     julia> pp(:skip, plot(1:4), plot(1:5), plot(1:6))  # add multiple panels in one command
     julia> pp(:newpage) # flush any partial screen and start new page (NB: always add this at end of a sequence!)
+
+    julia> pp = PlotPager((2, 2); displayfunc=(plot, nplot)->savefig(plot, "plot_\$nplot.png")) # save to file instead of default display
 
 # Commands
 - `pp(p)`: accumulate plot p
@@ -34,8 +39,13 @@ struct PlotPager
     layout
     kwargs::NamedTuple
     _current_plots::Vector
-    function PlotPager(layout, kwargs=NamedTuple())
-        return new(layout, kwargs, [])
+    nplots::Ref{Int64}
+    displayfunc
+    function PlotPager(
+        layout, kwargs=NamedTuple();
+        displayfunc=(plot, nplot)->display(plot),
+    )
+        return new(layout, kwargs, [], Ref(0), displayfunc)
     end
 end
 
@@ -48,8 +58,12 @@ function (pp::PlotPager)(p)
     length(pp._current_plots) <= _plots_per_screen(pp.layout) ||
         error("length(_current_plots) > plots_per_screen")
     if length(pp._current_plots) == _plots_per_screen(pp.layout)
-        display(RecipesBase.plot(pp._current_plots...; layout=pp.layout, pp.kwargs...))
+        plot_ref = RecipesBase.plot(pp._current_plots...; layout=pp.layout, pp.kwargs...)
         empty!(pp._current_plots)
+
+        pp.nplots[] += 1
+        pp.displayfunc(plot_ref, pp.nplots[])
+        
     end
 
     return nothing
