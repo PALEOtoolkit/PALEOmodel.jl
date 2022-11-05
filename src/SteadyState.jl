@@ -75,7 +75,7 @@ function steadystate(
 
     if jac_ad==:NoJacobian
         @info "steadystate: no Jacobian"   
-        df = NLsolve.OnceDifferentiable(ssf!, similar(initial_state), similar(initial_state)) 
+        nldf = NLsolve.OnceDifferentiable(ssf!, similar(initial_state), similar(initial_state)) 
     else       
         @info "steadystate:  using Jacobian $jac_ad"
         jacode, jac_prototype = JacobianAD.jac_config_ode(jac_ad, run.model, initial_state, modeldata, tss; generated_dispatch)        
@@ -84,9 +84,9 @@ function steadystate(
 
         if !isnothing(jac_prototype)
             # sparse Jacobian
-            df = NLsolve.OnceDifferentiable(ssf!, ssJ!, similar(initial_state), similar(initial_state), copy(jac_prototype)) 
+            nldf = NLsolve.OnceDifferentiable(ssf!, ssJ!, similar(initial_state), similar(initial_state), copy(jac_prototype)) 
         else
-            df = NLsolve.OnceDifferentiable(ssf!, ssJ!, similar(initial_state), similar(initial_state)) 
+            nldf = NLsolve.OnceDifferentiable(ssf!, ssJ!, similar(initial_state), similar(initial_state)) 
         end
 
     end
@@ -94,7 +94,7 @@ function steadystate(
     @info lpad("", 80, "=")
     @info "steadystate: calling nlsolve..."
     @info lpad("", 80, "=")
-    @time sol = NLsolve.nlsolve(df, copy(initial_state); solvekwargs...);
+    @time sol = NLsolve.nlsolve(nldf, copy(initial_state); solvekwargs...);
     
     @info lpad("", 80, "=")
     @info " * Algorithm: $(sol.method)"
@@ -167,7 +167,7 @@ to the rate of convergence, so requires some trial-and-error to set an appropiat
 
 # Keywords
 - `deltat_fac=2.0`: factor to increase pseudo-timestep on success
-- `tss_output=[]`: Vector of model times at which to save output (empty Vector to save all output timesteps)
+- `tss_output=Float64[]`: Vector of model times at which to save output (empty Vector to save all output timesteps)
 - `outputwriter=run.output`: output destination
 - `solvekwargs=NamedTuple()`: arguments to pass through to NLsolve
 - `max_iter=1000`: maximum number of PTC iterations
@@ -186,7 +186,7 @@ to the rate of convergence, so requires some trial-and-error to set an appropiat
 function steadystate_ptc(
     run, initial_state, modeldata, tspan, deltat_initial::Float64;
     deltat_fac=2.0,
-    tss_output=[],
+    tss_output=Float64[],
     outputwriter=run.output,
     solvekwargs::NamedTuple=NamedTuple{}(),
     max_iter=1000,
@@ -300,7 +300,7 @@ As [`steadystate_ptc`](@ref), with an inner Newton solve for per-cell algebraic 
 function steadystate_ptc_splitdae(
     run, initial_state, modeldata, tspan, deltat_initial::Float64;
     deltat_fac=2.0,
-    tss_output=[],
+    tss_output=Float64[],
     outputwriter=run.output,
     solvekwargs::NamedTuple=NamedTuple{}(),
     max_iter=1000,
@@ -359,7 +359,7 @@ Pseudo-transient continuation using NLsolve with `nlsolveF` function objects cre
 function solve_ptc(
     run, initial_state, @nospecialize(nlsolveF), tspan, deltat_initial::Float64;
     deltat_fac=2.0,
-    tss_output=[],
+    tss_output=Float64[],
     max_iter=1000,
     outputwriter=run.output,
     solvekwargs::NamedTuple=NamedTuple{}(),
@@ -379,28 +379,26 @@ function solve_ptc(
     ############################################################
     # Vectors to accumulate solution at each pseudo-timestep
     #########################################################
-    
-    # first entry is initial state
-    tsoln = [tss_initial]                       # vector of pseudo-times
-    soln = [copy(initial_state)]        # vector of state vectors at each pseudo-time
+  
+    # remove any tss_output prior to start time
+    tss_output_filtered = filter(x->x>=tss_initial, tss_output)
 
-    # Vectors to accumulate solution at requested tss_output    
-    iout = 1                            # tss_output[iout] is model time of next record to output
+    # Vectors to accumulate solution at requested tss_output_filtered
+    # first entry is initial state
+    @info "    writing output record at initial time tmodel = $(tss_initial)"
+    iout = 1                            # tss_output_filtered[iout] is model time of next record to output
     tsoln = [tss_initial]                       # output vector of pseudo-times
     soln = [copy(initial_state)]        # output vector of state vectors at each pseudo-time
     # Always write initial state as first entry (whether requested or not)
-    if !isempty(tss_output) && (tss_output[1] == tss_initial)
+    if !isempty(tss_output_filtered) && (tss_output_filtered[1] == tss_initial)
         # don't repeat initial state if that was requested
         iout += 1
     end
 
     ########################################################
-    # state held in nlsolveF
+    # unpack callable structs from nlsolveF
     ########################################################
-    ssFJ!, df = nlsolveF
-    tss = ssFJ!.t
-    deltat = ssFJ!.delta_t
-    previous_state = ssFJ!.previous_u
+    ssFJ!, nldf = nlsolveF
   
     #################################################
     # outer loop over pseudo-timesteps
@@ -416,21 +414,21 @@ function solve_ptc(
     @time while tss < tss_max && ptc_iter <= max_iter
         deltat_full = deltat  # keep track of the deltat we could have used
         deltat = min(deltat, tss_max - tss) # limit last timestep to get to tss_max
-        if iout < length(tss_output)
-            deltat = min(deltat, tss_output[iout] - tss) # limit timestep to get to next requested output
+        if iout <= length(tss_output_filtered)
+            deltat = min(deltat, tss_output_filtered[iout] - tss) # limit timestep to get to next requested output
         end
 
         tss += deltat
 
         verbose && @info lpad("", 80, "=")
-        @info "steadystate: ptc_iter $ptc_iter tss $(tss) deltat=$(deltat) deltat_full=$deltat_full calling nlsolve..."
+        @info "steadystate_ptc: ptc_iter $ptc_iter tss $(tss) deltat=$(deltat) deltat_full=$deltat_full calling nlsolve..."
         verbose && @info lpad("", 80, "=")
         
         sol_ok = true
         try
             # solve nonlinear system for this pseudo-timestep
             set_step!(ssFJ!, tss, deltat, previous_state)
-            sol = NLsolve.nlsolve(df, previous_state; solvekwargs...)
+            sol = NLsolve.nlsolve(nldf, previous_state; solvekwargs...)
             
             if verbose
                 io = IOBuffer()
@@ -488,9 +486,10 @@ function solve_ptc(
                 previous_state .= max.(sol.zero, sol_min)
             end
             # write output record, if required
+            # NB: test tss_output not tss_output_filtered, so we don't write every timestep if !isempty(tss_output) but all tss_output filtered out
             if isempty(tss_output) ||                       # all records requested, or ...
-                (iout <= length(tss_output) &&                  # (not yet done last requested record
-                    tss >= tss_output[iout])                    # and just gone past a requested record)              
+                (iout <= length(tss_output_filtered) &&                  # (not yet done last requested record
+                    tss >= tss_output_filtered[iout])                    # and just gone past a requested record)              
                 @info "    writing output record at tmodel = $(tss)"
                 push!(tsoln, tss)
                 push!(soln, copy(sol.zero))
@@ -606,9 +605,14 @@ end
         request_adchunksize=10,
         jac_cellranges=modeldata.cellranges_all,
         generated_dispatch=true,
-    ) -> (ssFJ!, df::NLsolve.OnceDifferentiable)
+    ) -> (ssFJ!::FJacPTC, nldf::NLsolve.OnceDifferentiable)
 
-Create function object to pass to NLsolve, with function + optional Jacobian
+Create a function object `nldf` to pass to NLsolve.
+    
+`ssFJ!` is a callable struct that holds model state, model time, and requested backwards-Euler timestep,
+with methods to calculate time derivative and (optional) Jacobian.
+    
+`nldf` is a NLsolve wrapper containing `ssFJ!`
 """
 function nlsolveF_PTC(
     model, initial_state, modeldata;
@@ -641,7 +645,7 @@ function nlsolveF_PTC(
         @info "steadystate: no Jacobian"
         # Define the function we want to solve 
         ssFJ! = FJacPTC(modelode, nothing, tss, deltat, nothing, nothing, previous_u, du_worksp)
-        df = NLsolve.OnceDifferentiable(ssFJ!, similar(initial_state), similar(initial_state)) 
+        nldf = NLsolve.OnceDifferentiable(ssFJ!, similar(initial_state), similar(initial_state)) 
     else       
         @info "steadystate:  using Jacobian $jac_ad"
         jacode, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
@@ -662,10 +666,10 @@ function nlsolveF_PTC(
         # Define the function + Jacobian we want to solve
         !isnothing(jac_prototype) || error("Jacobian is not sparse")
         # function + sparse Jacobian with sparsity pattern defined by jac_prototype
-        df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state), similar(initial_state), copy(jac_prototype))         
+        nldf = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state), similar(initial_state), copy(jac_prototype))         
     end
 
-    return (ssFJ!, df)
+    return (ssFJ!, nldf)
 end
 
 
@@ -767,9 +771,9 @@ function nlsolveF_SplitPTC(ms::SplitDAE.ModelSplitDAE, initial_state_outer, jaco
     ssFJ! = FJacSplitPTC(ms, tss, deltat, previous_u, du_worksp)
 
     # function + sparse Jacobian with sparsity pattern defined by jac_prototype
-    df = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state_outer), similar(initial_state_outer), copy(jacouter_prototype))
+    nldf = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state_outer), similar(initial_state_outer), copy(jacouter_prototype))
 
-    return (ssFJ!, df)
+    return (ssFJ!, nldf)
 end
 
 end # module
