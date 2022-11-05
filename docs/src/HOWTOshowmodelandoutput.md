@@ -134,12 +134,14 @@ Here the optional `labelattribute=:filter_records` keyword argument is used to g
 the Vector-valued `tmodel` argument to overlay a sequence of plots.
 
 This is equivalent to first creating and then plotting a sequence of `FieldArray` objects:
+
     julia> O3_mr = PALEOmodel.get_array(run.output, "atm.O3_mr", (tmodel=0.0, column=1))
     julia> plot(title="O3 mixing ratio", O3_mr, swap_xy=true, xscale=:log10, labelattribute=:filter_records)
     julia> O3_mr = PALEOmodel.get_array(run.output, "atm.O3_mr", (tmodel=0.1, column=1))
     julia> plot!(O3_mr, swap_xy=true, labelattribute=:filter_records)
 
 The default height coordinate from the model grid can be replaced using the optional `coords` keyword argument, eg
+
     julia> plot(title="O3 mixing ratio", output, "atm.O3_mr", (tmodel=[0.0, 0.1, 1.0, 10.0, 100.0, 1000.0], column=1),
                 coords=["p"=>("atm.pmid", "atm.plower", "atm.pupper")],
                 swap_xy=true, xscale=:log10, yflip=true, yscale=:log10, labelattribute=:filter_records) # plots O3 vs pressure
