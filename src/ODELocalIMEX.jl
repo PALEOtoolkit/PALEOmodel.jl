@@ -62,15 +62,15 @@ function integrateLocalIMEXEuler(
 
     PB.check_modeldata(run.model, modeldata)
 
-    solver_view_outer = PALEOmodel.create_solver_view(run.model, modeldata, cellranges_outer)
+    solver_view_outer = PALEOmodel.SolverView(run.model, modeldata, 1, cellranges_outer)
     @info "solver_view_outer: $(solver_view_outer)"    
     
     lictxt = create_timestep_LocalImplicit_ctxt(
         run.model, modeldata;                                   
         cellrange=cellrange_inner,
-        exclude_var_nameroots=exclude_var_nameroots,
-        niter_max=niter_max,
-        Lnorm_inf_max=Lnorm_inf_max
+        exclude_var_nameroots,
+        niter_max,
+        Lnorm_inf_max,
     )
 
     timesteppers = [
@@ -185,7 +185,6 @@ function create_timestep_LocalImplicit_ctxt(
     Lnorm_inf_max,
     request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     generated_dispatch=true,
-    init_logger=Logging.NullLogger(),
 )
     PB.check_modeldata(model, modeldata)
 
@@ -193,12 +192,15 @@ function create_timestep_LocalImplicit_ctxt(
     cellrange_cell = PB.CellRange(cellrange.domain, cellrange.operatorID, first(cellrange.indices) )
 
     # get SolverView for all Variables required for cellrange derivative
-    solver_view_all_cell = PALEOmodel.create_solver_view(model, modeldata, [cellrange_cell], indices_from_cellranges=true)
+    solver_view_all_cell = PALEOmodel.SolverView(
+        model, modeldata, 1, [cellrange_cell];
+        indices_from_cellranges=true
+    )
     @info "getLocalImplicitContext: all Variables (first cell) $solver_view_all_cell)"  
  
     # get reduced set of Variables required for nonlinear solve
-    solver_view_cell = PALEOmodel.create_solver_view(
-        model, modeldata, [cellrange_cell], 
+    solver_view_cell = PALEOmodel.SolverView(
+        model, modeldata, 1, [cellrange_cell];
         exclude_var_nameroots=exclude_var_nameroots,
         indices_from_cellranges=true,
     )
@@ -210,11 +212,11 @@ function create_timestep_LocalImplicit_ctxt(
     excluded_vars = [
         v for v in solver_view_all_cell.stateexplicit.vars if !(v in solver_view_cell.stateexplicit.vars)
     ]
-    va_excluded = PB.VariableAggregator(excluded_vars, [cellrange for v in excluded_vars], modeldata)
+    va_excluded = PB.VariableAggregator(excluded_vars, [cellrange for v in excluded_vars], modeldata, 1)
     excluded_sms_vars = [
         v for v in solver_view_all_cell.stateexplicit_deriv.vars if !(v in solver_view_cell.stateexplicit_deriv.vars)
     ]
-    va_sms_excluded = PB.VariableAggregator(excluded_sms_vars, [cellrange for v in excluded_sms_vars], modeldata)
+    va_sms_excluded = PB.VariableAggregator(excluded_sms_vars, [cellrange for v in excluded_sms_vars], modeldata, 1)
     length(excluded_vars) == length(excluded_sms_vars) ||
         error("excluded_vars and excluded_sms_vars length mismatch")
 
@@ -226,13 +228,13 @@ function create_timestep_LocalImplicit_ctxt(
     @info "  solve vars: $([PB.fullname(v) for v in solver_view_cell.stateexplicit.vars]) sms_vars: $([PB.fullname(v) for v in solver_view_cell.stateexplicit_deriv.vars])"
     @info "  excluded vars: $([PB.fullname(v) for v in excluded_vars]) sms_vars: $([PB.fullname(v) for v in excluded_sms_vars])"
    
-    # create a modeldata_ad with Dual numbers for AD Jacobians
+    # Add an array set with Dual numbers to modeldata, for AD Jacobians
     chunksize = ForwardDiff.pickchunksize(n_solve, request_adchunksize)
     @info "  using ForwardDiff dense Jacobian chunksize=$chunksize"
-
-    _, modeldata_ad = Logging.with_logger(init_logger) do
-        PALEOmodel.initialize!(model, eltype=ForwardDiff.Dual{Nothing, eltype(modeldata), chunksize}; create_dispatchlists_all=false)
-    end
+    eltype_base = eltype(modeldata, 1)
+    eltype_jac_cell = ForwardDiff.Dual{Nothing, eltype_base, chunksize}
+    PB.add_arrays_data!(model, modeldata, eltype_jac_cell, "jac_cell")
+    arrays_idx_jac_cell = PB.num_arrays(modeldata)
  
     # temporarily replace modeldata with norm so can read back per-cell norms
     statevar_all_current = PALEOmodel.get_statevar(modeldata.solver_view_all)
@@ -248,9 +250,9 @@ function create_timestep_LocalImplicit_ctxt(
         # (ab)use that fact that Julia allows iteration over scalar i (to optimise out loop over cellrange.indices)
         cellrange = PB.CellRange(cellrange.domain, cellrange.operatorID, i) 
 
-        sv = PALEOmodel.create_solver_view(
-            model, modeldata, [cellrange], 
-            exclude_var_nameroots=exclude_var_nameroots,
+        sv = PALEOmodel.SolverView(
+            model, modeldata, 1, [cellrange];
+            exclude_var_nameroots,
             indices_from_cellranges=true,
             hostdep_all=false,
         )
@@ -260,18 +262,18 @@ function create_timestep_LocalImplicit_ctxt(
         statevar_norm = PALEOmodel.get_statevar_norm(sv)
         push!(statevar_norms, statevar_norm)        
         
-        dl = PB.create_dispatch_methodlists(model, modeldata, [cellrange]; generated_dispatch)
+        dl = PB.create_dispatch_methodlists(model, modeldata, 1, [cellrange]; generated_dispatch)
         push!(dispatchlists, dl)
 
-        sv_ad = PALEOmodel.create_solver_view(
-            model, modeldata_ad, [cellrange], 
-            exclude_var_nameroots=exclude_var_nameroots,
+        sv_ad = PALEOmodel.SolverView(
+            model, modeldata, arrays_idx_jac_cell, [cellrange]; 
+            exclude_var_nameroots,
             indices_from_cellranges=true,
             hostdep_all=false,
         )
         push!(solverviews_ad, sv_ad)
        
-        dl_ad = PB.create_dispatch_methodlists(model, modeldata_ad, [cellrange]; generated_dispatch)
+        dl_ad = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_jac_cell, [cellrange]; generated_dispatch)
 
         push!(dispatchlists_ad, dl_ad)
 
@@ -282,7 +284,7 @@ function create_timestep_LocalImplicit_ctxt(
 
     cell_residual = CellResidual(
         n_solve,
-        eltype(modeldata),
+        eltype_base,
         cellindices,
         [sv for sv in solverviews],  # narrow type
         [dl for dl in dispatchlists], # narrow type
@@ -292,7 +294,7 @@ function create_timestep_LocalImplicit_ctxt(
     cell_jacobian = CellJacobian(
         CellResidual(
             n_solve,
-            eltype(modeldata_ad),
+            eltype_jac_cell,
             cellindices,
             [sv for sv in solverviews_ad],  # narrow type
             [dl for dl in dispatchlists_ad], # narrow type

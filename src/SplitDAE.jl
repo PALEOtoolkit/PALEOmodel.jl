@@ -29,7 +29,6 @@ import ..SparseUtils
         operatorID_inner=0,
         transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],  # additional Variables needed by 'inner' Reactions
         inner_jac_ad=:ForwardDiff: # form of automatic differentiation to use for Jacobian for inner solver (options `:ForwardDiff`, `:ForwardDiffSparse`)
-        init_logger=Logging.NullLogger(),
         inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
         generated_dispatch=true,
     ) -> (ms::ModelSplitDAE, initial_state_outer, jac_outer_prototype)
@@ -62,7 +61,6 @@ function create_split_dae(
     operatorID_inner=0,
     transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],  # additional Variables needed by 'inner' Reactions
     inner_jac_ad=:ForwardDiff,
-    init_logger=Logging.NullLogger(),
     inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
     generated_dispatch=true,
 )
@@ -74,12 +72,13 @@ function create_split_dae(
     # 'outer' Variables are PALEO stateexplicit, stateexplicit_deriv (paired ODE derivatives, with :vfunction=PB.VF_StateExplicit, PB.VF_Deriv)
     # 'inner' Variables are PALEO state, constraint (DAE state and algebraic constraints, with :vfunction=PB.VF_StateExplicit, PB.VF_Deriv)
     #
-    # There are three modeldata structs (with data arrays) here, with corresponding
-    # dispatchlists and variable aggregators:
+    # Three modeldata array sets are used here, with corresponding dispatchlists and variable aggregators:
     #
-    # modeldata:            Float64 elements
-    # modeldata_jacfull:    Dual numbers needed for full Jacobian
-    # modeldata_jaccell:    Dual numbers needed for per-cell Jacobian
+    # arrays_idx=1:         base Float64 elements
+    # arrays_idx=2:         Dual numbers needed for full Jacobian
+    # arrays_idx=3:         Dual numbers needed for per-cell Jacobian
+
+    eltype_base = eltype(modeldata, 1)  # eg Float64, element type of base modeldata arrays
 
     sva = modeldata.solver_view_all
     # We only support explicit ODE + DAE constraints (no implicit variables)
@@ -88,7 +87,7 @@ function create_split_dae(
 
     # dispatch list to recalculate derivative after inner solve. Could exclude costly Reactions (eg radiative transfer)
     @timeit "dispatchlists_recalc_deriv" begin
-    dispatchlists_recalc_deriv = PB.create_dispatch_methodlists(model, modeldata, jac_cellranges; generated_dispatch)
+    dispatchlists_recalc_deriv = PB.create_dispatch_methodlists(model, modeldata, 1, jac_cellranges; generated_dispatch)
     # dispatchlists_recalc_deriv = nothing # disable
     end # timeit
 
@@ -97,7 +96,7 @@ function create_split_dae(
     va_stateexplicit_deriv = sva.stateexplicit_deriv
     # calculate initial_state_outer
     PALEOmodel.set_statevar!(sva, initial_state)
-    initial_state_outer = Vector{eltype(modeldata)}(undef, length(va_stateexplicit))
+    initial_state_outer = Vector{eltype_base}(undef, length(va_stateexplicit))
     copyto!(initial_state_outer, va_stateexplicit)
 
     
@@ -138,14 +137,14 @@ function create_split_dae(
         
         # VariableAggregator to calculate state and constraints for this cell
         vars_cellranges = fill(cellrange, n_inner_solve)
-        va_cell_state = PB.VariableAggregator(va_state.vars, vars_cellranges, modeldata)
-        va_cell_constraints = PB.VariableAggregator(va_constraints.vars, vars_cellranges, modeldata)
+        va_cell_state = PB.VariableAggregator(va_state.vars, vars_cellranges, modeldata, 1)
+        va_cell_constraints = PB.VariableAggregator(va_constraints.vars, vars_cellranges, modeldata, 1)
         # read out initial value for state variables
-        cell_initial_state = Vector{eltype(modeldata)}(undef, n_inner_solve)
+        cell_initial_state = Vector{eltype_base}(undef, n_inner_solve)
         copyto!(cell_initial_state, va_cell_state)
         push!(cellinitialstates, cell_initial_state)
         # dispatchlists for this cell
-        va_cell_dl = PB.create_dispatch_methodlists(model, modeldata, [cellrange]; generated_dispatch)
+        va_cell_dl = PB.create_dispatch_methodlists(model, modeldata, 1, [cellrange]; generated_dispatch)
         push!(cellderivs, ModelDerivCell(n_inner_solve, modeldata, va_cell_state, va_cell_constraints, va_cell_dl, cellworksp))
        
         # index in full model for per-cell Variables
@@ -168,13 +167,6 @@ function create_split_dae(
         generated_dispatch,
     )
     end # timeit
-    @info "create_split_dae:  Variables to be copied from 'modeldata' before full Jacobian calculation:"
-    # any Variables calculated by modelode but not jacode, that need to be copied
-    transfer_data_jacfull, transfer_data = PALEOmodel.JacobianAD.jac_transfer_variables(
-        model,
-        jacfull.modeldata,
-        modeldata
-    )
 
     #########################################################################################
     # Calculate Jacobian sparsity patterns for outer and inner Jacobians from full Jacobian
@@ -242,18 +234,18 @@ function create_split_dae(
 
     end # timeit
     #########################################################################
-    # create a modeldata_jaccell with Dual numbers for AD Jacobians for 'inner' Newton solve
+    # Add array set to modeldata, with Dual numbers for AD Jacobians for 'inner' Newton solve
     #####################################################################
 
     if inner_jac_ad == :ForwardDiff
         println(io, "    using ForwardDiff dense Jacobian for inner Newton solve")   
-        eltype_jaccell = ForwardDiff.Dual{Nothing, eltype(modeldata), n_inner_solve}
+        eltype_jaccell = ForwardDiff.Dual{Nothing, eltype_base, n_inner_solve}
 
     elseif inner_jac_ad == :ForwardDiffSparse
        
         colorvec = SparseDiffTools.matrix_colors(jacinner_prototype)
         jacinner_chunksize = ForwardDiff.pickchunksize(maximum(colorvec), request_adchunksize)
-        eltype_jaccell = ForwardDiff.Dual{Nothing, eltype(modeldata), jacinner_chunksize}
+        eltype_jaccell = ForwardDiff.Dual{Nothing, eltype_base, jacinner_chunksize}
         
         println(io, "    using ForwardDiffSparse Jacobian for inner Newton solve colors $(maximum(colorvec)) chunksize $jacinner_chunksize") 
 
@@ -267,21 +259,15 @@ function create_split_dae(
         error("unrecognized inner_jac_ad $inner_jac_ad")
     end
 
-    @timeit "modeldata_jaccell initialize!" begin
-    _, modeldata_jaccell = Logging.with_logger(init_logger) do
-        PALEOmodel.initialize!(model; eltype=eltype_jaccell, create_dispatchlists_all=false)
-    end
+    @timeit "add_arrays_data! jaccell" begin
+        PB.add_arrays_data!(model, modeldata, eltype_jaccell, "jac_cell"; use_base_vars=transfer_inner_vars)
+        arrays_idx_jaccell = PB.num_arrays(modeldata)
+        jaccell_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jaccell) # Variables from whole model
+        # jaccell_dispatchlists = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_jac_ad, jac_cellranges; generated_dispatch)
     end # timeit
-    va_stateexplicit_jaccell = modeldata_jaccell.solver_view_all.stateexplicit
-    println(io, "    Variables to be copied from 'modeldata' before inner Newton solve Jacobian calculation:")
+    va_stateexplicit_jaccell = jaccell_solverview.stateexplicit
+
     @info String(take!(io))
-    # any Variables calculated by modelode but not jacode, that need to be copied
-    transfer_data_inner_jaccell, transfer_data_inner = PALEOmodel.JacobianAD.jac_transfer_variables(
-        model,
-        modeldata_jaccell,
-        modeldata;
-        extra_vars=transfer_inner_vars
-    )
 
     ###########################################################
     # construct function objects to calculate per-cell Jacobian for 'inner' Variables
@@ -291,15 +277,15 @@ function create_split_dae(
     cellworksp_jacsparse = copy(jacinner_prototype)
     @timeit "cell_jacobians" begin
     for cellrange in cellcellranges
-        # modeldata_jaccell Arrays to calculate constraints, with appropriate Dual number element type
+        # Variable Aggegators to calculate constraints, with appropriate Dual number element type for per-cell Jacobian
         vars_cellranges = fill(cellrange, n_inner_solve)
-        va_cell_state_jaccell = PB.VariableAggregator(va_state.vars, vars_cellranges, modeldata_jaccell)
-        va_cell_constraints_jaccell = PB.VariableAggregator(va_constraints.vars, vars_cellranges, modeldata_jaccell)
-        va_cell_dl_jaccell = PB.create_dispatch_methodlists(model, modeldata_jaccell, [cellrange]; generated_dispatch)
+        va_cell_state_jaccell = PB.VariableAggregator(va_state.vars, vars_cellranges, modeldata, arrays_idx_jaccell)
+        va_cell_constraints_jaccell = PB.VariableAggregator(va_constraints.vars, vars_cellranges, modeldata, arrays_idx_jaccell)
+        va_cell_dl_jaccell = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_jaccell, [cellrange]; generated_dispatch)
 
-        # function object to calculate constraints, with appropriate Dual number element type
+        # function object to calculate constraints, with appropriate Dual number element type for per-cell Jacobian
         constraintscell = ModelDerivCell(
-            n_inner_solve, modeldata_jaccell, va_cell_state_jaccell, va_cell_constraints_jaccell, va_cell_dl_jaccell, cellworksp_jaccell
+            n_inner_solve, modeldata, va_cell_state_jaccell, va_cell_constraints_jaccell, va_cell_dl_jaccell, cellworksp_jaccell
         )
 
         # function object to calculate per-cell Jacobian
@@ -327,10 +313,6 @@ function create_split_dae(
         dispatchlists_recalc_deriv,
         jacfull,
         copy(jacfull_prototype),
-        transfer_data_jacfull,
-        transfer_data,
-        transfer_data_inner_jaccell,
-        transfer_data_inner,
         va_stateexplicit,
         va_stateexplicit_deriv,
         va_stateexplicit_jaccell,
@@ -365,17 +347,13 @@ Provides functions for outer derivative and Jacobian:
     (ms::ModelSplitDAE)(du_outer::AbstractVector, J_outer::SparseArrays.AbstractSparseMatrixCSC, u_outer::AbstractVector, p, t)    
 
 """
-struct ModelSplitDAE{T, SVA, DLA, DLR, JF, TD1, TD2, TD3, TD4, VA1, VA2, VA3, CD, CJ, IK, LU}
-    modeldata::PB.ModelData{T}
+struct ModelSplitDAE{T, SVA, DLA, DLR, JF, VA1, VA2, VA3, CD, CJ, IK, LU}
+    modeldata::PB.ModelData
     solver_view_all::SVA
     dispatchlists_all::DLA
     dispatchlists_recalc_deriv::DLR
     jacfull::JF
     jacfull_ws::SparseArrays.SparseMatrixCSC{T, Int64}
-    transfer_data_jacfull::TD1
-    transfer_data::TD2
-    transfer_data_inner_jaccell::TD3
-    transfer_data_inner::TD4
     va_stateexplicit::VA1
     va_stateexplicit_deriv::VA2
     va_stateexplicit_jaccell::VA3
@@ -404,11 +382,6 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, u_outer::AbstractVector, 
     PALEOmodel.set_tforce!(ms.solver_view_all, t)
     PB.do_deriv(ms.dispatchlists_all)
 
-    # copy Variables to inner AD Variables 
-    # explicitly requested Variables (eg grid geometry, photochemical rates, ...)
-    for (dto, dfrom) in PB.IteratorUtils.zipstrict(ms.transfer_data_inner_jaccell, ms.transfer_data_inner)
-        dto .= dfrom
-    end
     # always set all outer state variables (inner state variables will be solved for)
     copyto!(ms.va_stateexplicit_jaccell, u_outer)
 
@@ -455,11 +428,6 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, J_outer::SparseArrays.Abs
  
     # calculate derivative including solution for 'inner' state Variables
     ms(du_outer, u_outer, p, t)
-
-    # transfer Variables that are not included in Jacobian
-    for (dto, dfrom) in PB.IteratorUtils.zipstrict(ms.transfer_data_jacfull, ms.transfer_data)
-        dto .= dfrom
-    end
 
     # calculate full Jacobian
     u_full = ms.full_worksp
@@ -523,7 +491,7 @@ end
 
 # calculate derivative for a single cell
 mutable struct ModelDerivCell{Ncomps, T, VA1 <: PB.VariableAggregator, VA2 <: PB.VariableAggregator, D}
-    modeldata::PB.ModelData{T}
+    modeldata::PB.ModelData
     state::VA1
     deriv::VA2
     dispatchlists::D
@@ -531,7 +499,7 @@ mutable struct ModelDerivCell{Ncomps, T, VA1 <: PB.VariableAggregator, VA2 <: PB
     t::Float64
 end
 
-function ModelDerivCell(Ncomps, modeldata::PB.ModelData{T}, state::VA1, deriv::VA2, dispatchlists::D, worksp::Vector{T}) where {T, VA1 <: PB.VariableAggregator, VA2 <: PB.VariableAggregator, D}
+function ModelDerivCell(Ncomps, modeldata::PB.ModelData, state::VA1, deriv::VA2, dispatchlists::D, worksp::Vector{T}) where {T, VA1 <: PB.VariableAggregator, VA2 <: PB.VariableAggregator, D}
     return ModelDerivCell{Ncomps, T, VA1, VA2, D}(modeldata, state, deriv, dispatchlists, worksp, NaN)
 end
 

@@ -99,9 +99,9 @@ function integrateSplitEuler(
 
     PB.check_modeldata(run.model, modeldata)
 
-    solver_view_outer = PALEOmodel.create_solver_view(run.model, modeldata, cellranges_outer)
+    solver_view_outer = PALEOmodel.SolverView(run.model, modeldata, 1, cellranges_outer)
     @info "solver_view_outer: $(solver_view_outer)"    
-    solver_view_inner = PALEOmodel.create_solver_view(run.model, modeldata, cellranges_inner)
+    solver_view_inner = PALEOmodel.SolverView(run.model, modeldata, 1, cellranges_inner)
     @info "solver_view_inner: $(solver_view_inner)"
     
     timesteppers = [
@@ -174,7 +174,7 @@ function integrateEulerthreads(
         error("integrateEulerthreads: length(cellranges) $lc != nthreads $nt")
 
     # get solver_views for each threadid
-    solver_views = [PALEOmodel.create_solver_view(run.model, modeldata, crs) for crs in cellranges]
+    solver_views = [PALEOmodel.SolverView(run.model, modeldata, 1, crs) for crs in cellranges]
     @info "integrateEulerthreads: solver_views:" 
     for t in 1:Threads.nthreads()
         @info "  thread $t  $(solver_views[t])"
@@ -253,8 +253,8 @@ function integrateSplitEulerthreads(
         error("integrateSplitEulerthreads: length(cellranges_inner) $lc_inner != nthreads $nt")
 
     # get solver_views for each threadid
-    solver_views_outer = [PALEOmodel.create_solver_view(run.model, modeldata, crs) for crs in cellranges_outer]
-    solver_views_inner = [PALEOmodel.create_solver_view(run.model, modeldata, crs) for crs in cellranges_inner]
+    solver_views_outer = [PALEOmodel.SolverView(run.model, modeldata, 1, crs) for crs in cellranges_outer]
+    solver_views_inner = [PALEOmodel.SolverView(run.model, modeldata, 1, crs) for crs in cellranges_inner]
     @info "integrateSplitEulerthreads: solver_views_outer:" 
     for t in 1:Threads.nthreads()
         @info "  thread $t $(solver_views_outer[t])"
@@ -349,7 +349,7 @@ function create_timestep_Euler_ctxt(
     num_constraints = PALEOmodel.num_algebraic_constraints(solver_view)
     iszero(num_constraints) || error("DAE problem with $num_constraints algebraic constraints")
 
-    dispatch_lists = PB.create_dispatch_methodlists(model, modeldata, cellranges; verbose, generated_dispatch)
+    dispatch_lists = PB.create_dispatch_methodlists(model, modeldata, 1, cellranges; verbose, generated_dispatch)
 
     return (dispatch_lists, solver_view, n_substep)
 end
