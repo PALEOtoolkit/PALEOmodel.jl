@@ -27,8 +27,8 @@ Function object to calculate model time derivative and adapt to SciML ODE solver
 
 Call as `f(du,u, p, t)`
 """
-mutable struct ModelODE{T, S <: PALEOmodel.SolverView, D}
-    modeldata::PB.ModelData{T}
+mutable struct ModelODE{S <: PALEOmodel.SolverView, D}
+    modeldata::PB.ModelData
     solver_view::S
     dispatchlists::D
     nevals::Int
@@ -224,8 +224,8 @@ where residual `G(dsdt,s,p,t)` is:
 - `F(s)` (for algebraic constraints)
 - `duds*dsdt + F(s, u(s))` (for Total variables u that depend implicitly on state Variables s)
 """
-mutable struct ModelDAE{T, S <: PALEOmodel.SolverView, D, O}
-    modeldata::PB.ModelData{T}
+mutable struct ModelDAE{S <: PALEOmodel.SolverView, D, O}
+    modeldata::PB.ModelData
     solver_view::S
     dispatchlists::D
     odeimplicit::O
@@ -357,8 +357,8 @@ end
 
 Calculate dT/dS required for a model containing implicit Total variables, using ForwardDiff and dense AD
 """
-mutable struct ImplicitForwardDiffDense{T, S, D, W, I, U}
-    modeldata::PB.ModelData{T}
+mutable struct ImplicitForwardDiffDense{S, D, W, I, U}
+    modeldata::PB.ModelData
     implicitderiv::TotalForwardDiff{S, D}
     duds_template::W
     implicitconf::I
@@ -388,8 +388,8 @@ end
 Calculate dT/dS required for a model containing implicit Total variables, using ForwardDiff and 
 sparse AD with `SparseDiffTools.forwarddiff_color_jacobian!`
 """
-mutable struct ImplicitForwardDiffSparse{T, S, D, I, U}
-    modeldata::PB.ModelData{T}
+mutable struct ImplicitForwardDiffSparse{S, D, I, U}
+    modeldata::PB.ModelData
     implicitderiv::TotalForwardDiff{S, D}
     implicit_cache::I
     duds::U    

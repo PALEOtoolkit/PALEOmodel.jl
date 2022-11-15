@@ -43,14 +43,12 @@ Keyword arguments are required to generate a Jacobian function (using automatic 
 - `jac_ad=:NoJacobian`: Jacobian to generate and use (:NoJacobian, :ForwardDiffSparse, :ForwardDiff)
 - `initial_state::AbstractVector`: initial state vector
 - `jac_ad_t_sparsity::Float64`: model time at which to calculate Jacobian sparsity pattern
-- `init_logger=Logging.NullLogger()`: default value omits logging from (re)initialization to generate Jacobian modeldata, Logging.CurrentLogger() to include
 """
 function ODEfunction(
     model::PB.Model, modeldata;   
     jac_ad=:NoJacobian,
     initial_state=nothing,
     jac_ad_t_sparsity=nothing,    
-    init_logger=Logging.NullLogger(),
     generated_dispatch=true,
 )
     PB.check_modeldata(model, modeldata)
@@ -74,7 +72,7 @@ function ODEfunction(
        
     jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity;
-        init_logger, generated_dispatch,
+        generated_dispatch,
     )    
     
     f = SciMLBase.ODEFunction{true}(m; jac, jac_prototype, mass_matrix=M)
@@ -94,14 +92,12 @@ Keyword arguments are required to generate a Jacobian function (using automatic 
 - `jac_ad=:NoJacobian`: Jacobian to generate and use (:NoJacobian, :ForwardDiffSparse, :ForwardDiff)
 - `initial_state::AbstractVector`: initial state vector
 - `jac_ad_t_sparsity::Float64`: model time at which to calculate Jacobian sparsity pattern
-- `init_logger=Logging.NullLogger()`: default value omits logging from (re)initialization to generate Jacobian modeldata, Logging.CurrentLogger() to include
 """
 function DAEfunction(
     model::PB.Model, modeldata;   
     jac_ad=:NoJacobian,
     initial_state=nothing,
     jac_ad_t_sparsity=nothing,    
-    init_logger=Logging.NullLogger(),
     generated_dispatch=true,
 )
     @info "DAEfunction:  using Jacobian $jac_ad"
@@ -110,7 +106,7 @@ function DAEfunction(
     
     jac, jac_prototype, odeimplicit = PALEOmodel.JacobianAD.jac_config_dae(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity;
-        init_logger, generated_dispatch,
+        generated_dispatch,
     )
     m =  SolverFunctions.ModelDAE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, odeimplicit, 0)
     
@@ -161,7 +157,6 @@ and then
 - `steadystate=false`: true to use `DifferentialEquations.jl` `SteadyStateProblem`
   (not recommended, see [`PALEOmodel.SteadyState.steadystate`](@ref)).
 - `BLAS_num_threads=1`: number of LinearAlgebra.BLAS threads to use
-- `init_logger=Logging.NullLogger()`: default value omits logging from (re)initialization to generate Jacobian modeldata, Logging.CurrentLogger() to include
 - `generated_dispatch=true`: `true` to autogenerate code (fast solve, slow compile)
 """
 function integrate(
@@ -173,7 +168,6 @@ function integrate(
     jac_ad_t_sparsity=tspan[1],
     steadystate=false,
     BLAS_num_threads=1,
-    init_logger=Logging.NullLogger(),
     generated_dispatch=true,
 )
   
@@ -182,7 +176,6 @@ function integrate(
         jac_ad,
         initial_state,
         jac_ad_t_sparsity,    
-        init_logger,
         generated_dispatch,
     )
  
@@ -269,7 +262,6 @@ function integrateDAE(
     jac_ad=:NoJacobian,
     jac_ad_t_sparsity=tspan[1],
     BLAS_num_threads=1,
-    init_logger=Logging.NullLogger(),
     generated_dispatch=true,
 )
     
@@ -278,7 +270,6 @@ function integrateDAE(
         jac_ad,
         initial_state,
         jac_ad_t_sparsity,    
-        init_logger,
         generated_dispatch,
     )
    

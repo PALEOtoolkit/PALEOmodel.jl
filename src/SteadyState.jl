@@ -534,13 +534,11 @@ from state `previous_u`:
 - `F(u) = (u(t) - previous_u + delta_t * du(t)/dt)`
 - `J(u) = I - deltat * d(du(t)/dt)/du`
 """
-struct FJacPTC{T1, T2}
+struct FJacPTC
     modelode #::M no specialization to minimise recompilation
     jacode #::J
     t::Ref{Float64}
     delta_t::Ref{Float64}
-    transfer_data_ad::T1
-    transfer_data::T2
     previous_u::Vector{Float64}
     du_worksp::Vector{Float64}
 end
@@ -574,10 +572,6 @@ function (jn::FJacPTC)(F, J::Union{SparseArrays.SparseMatrixCSC, Nothing}, u)
     end
 
     if !isnothing(J)
-        # transfer Variables not recalculated by Jacobian
-        for (d_ad, d) in PB.IteratorUtils.zipstrict(jn.transfer_data_ad, jn.transfer_data)                
-            d_ad .= d
-        end
   
         jn.jacode(J, u, nothing, jn.t[])
         # convert J  = I - deltat * odeJac  
@@ -653,15 +647,9 @@ function nlsolveF_PTC(
             request_adchunksize,
             jac_cellranges,
             generated_dispatch,
-        )    
-
-        transfer_data_ad, transfer_data = PALEOmodel.JacobianAD.jac_transfer_variables(
-            model,
-            jacode.modeldata,
-            modeldata
         )
        
-        ssFJ! = FJacPTC(modelode, jacode, tss, deltat, transfer_data_ad, transfer_data, previous_u, du_worksp)
+        ssFJ! = FJacPTC(modelode, jacode, tss, deltat, previous_u, du_worksp)
  
         # Define the function + Jacobian we want to solve
         !isnothing(jac_prototype) || error("Jacobian is not sparse")

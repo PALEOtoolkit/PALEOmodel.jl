@@ -55,6 +55,7 @@ function steadystate_ptc(
     createkwargs::NamedTuple=NamedTuple{}(), 
     solvekwargs::NamedTuple=NamedTuple{}(),
     use_jac_ad_preconditioner=true,
+    jac_full=false,
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,   
     use_directional_ad=false,
@@ -84,13 +85,8 @@ function steadystate_ptc(
             request_adchunksize=request_adchunksize,
             jac_cellranges=jac_cellranges
         )    
-
-        (transfer_data_ad, transfer_data) = PALEOmodel.JacobianAD.jac_transfer_variables(
-            run.model, jac.modeldata, modeldata
-        )
     else
         jac, jac_prototype = nothing, []
-        transfer_data_ad, transfer_data = [], []
     end
 
     # workspace arrays
@@ -105,16 +101,16 @@ function steadystate_ptc(
 
     if use_directional_ad
         directional_context = PALEOmodel.JacobianAD.directional_config(
-            run.model,  modeldata.cellranges_all, eltypestomap=directional_ad_eltypestomap
+            run.model, modeldata, modeldata.cellranges_all, eltypestomap=directional_ad_eltypestomap, use_base_transfer_jacobian=false,
         )
     else
         directional_context = NamedTuple()
     end
 
     userdata = merge(
-        (;modeldata, jac, jac_prototype),
+        (;modeldata, jac, jac_prototype, jac_full),
         directional_context,
-        (;deriv_worksp, current_state, Jnorm, transfer_data_ad, transfer_data, deltat, tmodel, J_lu),
+        (;deriv_worksp, current_state, Jnorm, deltat, tmodel, J_lu),
     )
 
     # calculate residual F = S - Sinit - deltat*dS/dt    
@@ -155,14 +151,11 @@ function steadystate_ptc(
         fval, fscale,
         d
     )
-        if !isempty(d.transfer_data_ad)
+        if !d.jac_full
+            # calculate "normal" derivative as partial Jacobian relies on some of these Variables
             PALEOmodel.set_tforce!(d.modeldata.solver_view_all, d.tmodel[])
             PALEOmodel.set_statevar!(d.modeldata.solver_view_all, u)                 
             PB.do_deriv(d.modeldata.dispatchlists_all)
-            # transfer Variables not recalculated by Jacobian
-            for (td_ad, td) in zip(d.transfer_data_ad, d.transfer_data)                
-                td_ad .= td
-            end
         end
 
         # jac calculates un-normalized J

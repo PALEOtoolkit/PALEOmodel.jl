@@ -1,21 +1,32 @@
 """
-    SolverView
+    SolverView(model, modeldata, arrays_idx; [verbose=true]) 
+    SolverView(model, modeldata, cellranges; [verbose=false], [indices_from_cellranges=true])
 
 Provides a view on the whole or some part of the Model for a numerical solver.
-Contains `PALEOboxes.VariableAggregator`s for a subset of spatial locations 
+
+Contains `PALEOboxes.VariableAggregator`s for a subset of spatial locations  
 (Domains, indices within spatial Domains) and Variables, with:
-- ODE paired `stateexplicit` (S) and `stateexplicit_deriv` (dS/dt), where dS/dt = F(S).
-- Implicit-ODE paired `total` (T) and `total_deriv` (dT/dt), where dT(S)/dt = F(T(S)) with
-  `total` a function of explicit and implicit state Variables `statexplicit` and `state` (S).
-- Algebraic `constraint`s (C), where C(S) = 0 with C a function of explicit and implicit state Variables `statexplicit` and `state` (S),
-
+    - ODE paired `stateexplicit` (S) and `stateexplicit_deriv` (dS/dt), where dS/dt = F(S).
+    - Implicit-ODE paired `total` (T) and `total_deriv` (dT/dt), where dT(S)/dt = F(T(S)) with
+        `total` a function of explicit and implicit state Variables `statexplicit` and `state` (S).
+    - Algebraic `constraint`s (C), where C(S) = 0 with C a function of explicit and implicit state Variables `statexplicit` and `state` (S),
+    
 The number of `total` + number of `constraint` Variables must equal the number of implicit `state` Variables.
+    
+Optional access methods provide an `ODE/DAE solver` view with composite `statevar` and `statevar_sms`,where:
+    
+    - `statevar` is a concatenation of `stateexplicit` and `state` ([`set_statevar!`](@ref))
+    - `statevar_sms` is a concatenation of `stateexplicit_deriv`, `total_deriv`, `constraints` ([`get_statevar_sms!`](@ref))
 
-Optional access methods provide an `ODE/DAE solver` view with composite `statevar` and `statevar_sms`,
-where:
+Constructors create a [`SolverView`](@ref) for the entire model from `modeldata` array set `arrays_idx`, 
+or for a subset of Model Variables defined by the Domains and operatorIDs of `cellranges`. 
 
-- `statevar` is a concatenation of `stateexplicit` and `state` ([`set_statevar!`](@ref))
-- `statevar_sms` is a concatenation of `stateexplicit_deriv`, `total_deriv`, `constraints` ([`get_statevar_sms!`](@ref))
+# Keywords
+- `indices_from_cellranges=true`: true to restrict to the index ranges from `cellranges`, false to just use `cellranges` to define Domains
+and take the whole of each Domain.
+- `hostdep_all=true`: true to include host dependent not-state Variables from all Domains
+- `reallocate_hostdep_eltype=Float64`: a data type to reallocate `hostdep` Variables eg to replace any
+AD types.
 """
 mutable struct SolverView{
     T, 
@@ -39,7 +50,7 @@ mutable struct SolverView{
     hostdep::VA7
 
     function SolverView(
-        etype::Type{T};  # eltype(modeldata)
+        etype::Type{T};  # eltype(modeldata, arrays_idx)
         stateexplicit::A1, stateexplicit_deriv::A2, total::A3, total_deriv::A4, constraints::A5, state::A6, hostdep::A7
     ) where {T, A1, A2, A3, A4, A5, A6, A7}
         return new{T, A1, A2, A3, A4, A5, A6, A7}(
@@ -210,32 +221,17 @@ Set `global.tforce` model time (if defined) from t.
 set_tforce!(sv::SolverView, t) = PB.set_values!(sv.hostdep, Val(:global), Val(:tforce), t; allow_missing=true)
 
 
-"""
-    create_solver_view(model, modeldata; [verbose=true]) 
-        -> SolverView
-    create_solver_view(model, modeldata, cellranges; [verbose=false], [indices_from_cellranges=true])
-        -> SolverView
 
-Create a [`SolverView`](@ref) for the entire model, or for a subset of Model Variables defined by
-the Domains and operatorIDs of `cellranges`. 
-
-# Keywords
-- `indices_from_cellranges=true`: true to restrict to the index ranges from `cellranges`, false to just use `cellranges` to define Domains
-and take the whole of each Domain.
-- `hostdep_all=true`: true to include host dependent not-state Variables from all Domains
-- `reallocate_hostdep_eltype=Float64`: a data type to reallocate `hostdep` Variables eg to replace any
-AD types.
-"""
-create_solver_view(
-    model, modeldata::PB.AbstractModelData;
+SolverView(
+    model, modeldata::PB.AbstractModelData, arrays_idx::Int;
     verbose=true,
-) = create_solver_view(
-        model, modeldata, modeldata.cellranges_all,
+) = SolverView(
+        model, modeldata, arrays_idx, modeldata.cellranges_all;
         indices_from_cellranges=false, verbose=verbose,
     )
 
-function create_solver_view(
-    model, modeldata::PB.AbstractModelData, cellranges;
+function SolverView(
+    model, modeldata::PB.AbstractModelData, arrays_idx::Int, cellranges;
     verbose=false,
     indices_from_cellranges=true,
     exclude_var_nameroots=[],
@@ -244,11 +240,11 @@ function create_solver_view(
 )
  
     io = IOBuffer() # only displayed if verbose==true
-    println(io, "create_solver_view:")
+    println(io, "SolverView:")
     
     check_domains = [cr.domain for cr in cellranges]
     length(check_domains) == length(unique(check_domains)) ||
-        throw(ArgumentError("create_solver_view: cellranges contain duplicate Domains"))
+        throw(ArgumentError("SolverView: cellranges contain duplicate Domains"))
 
     stateexplicit, stateexplicit_deriv, stateexplicit_cr = PB.VariableDomain[], PB.VariableDomain[], []
     total, total_deriv, total_cr = PB.VariableDomain[], PB.VariableDomain[], []
@@ -316,7 +312,7 @@ function create_solver_view(
     end
 
     n_state_vars == n_equations || 
-        error("create_solver_view: n_state_vars != n_equations")
+        error("SolverView: n_state_vars != n_equations")
 
     if hostdep_all
         println(io, "  including all host-dependent non-state Variables")
@@ -330,7 +326,7 @@ function create_solver_view(
 
     if !isnothing(reallocate_hostdep_eltype)
          # If requested, change data type eg to remove AD type    
-        reallocated_variables = PB.reallocate_variables!(hostdep, modeldata, reallocate_hostdep_eltype)
+        reallocated_variables = PB.reallocate_variables!(hostdep, modeldata, arrays_idx, reallocate_hostdep_eltype)
         if !isempty(reallocated_variables)
             println(io, "  reallocating host-dependent Variables to eltype $reallocate_hostdep_eltype:")        
             for (v, old_eltype) in reallocated_variables
@@ -342,14 +338,14 @@ function create_solver_view(
     verbose && @info String(take!(io))  
 
     sv = SolverView(
-        eltype(modeldata),
-        stateexplicit = PB.VariableAggregator(stateexplicit, stateexplicit_cr, modeldata),
-        stateexplicit_deriv = PB.VariableAggregator(stateexplicit_deriv, stateexplicit_cr, modeldata),
-        total = PB.VariableAggregator(total, total_cr, modeldata),
-        total_deriv = PB.VariableAggregator(total_deriv, total_cr, modeldata),
-        constraints = PB.VariableAggregator(constraint, constraint_cr, modeldata),
-        state = PB.VariableAggregator(state, state_cr, modeldata),
-        hostdep = PB.VariableAggregatorNamed(hostdep, modeldata)
+        eltype(modeldata, arrays_idx),
+        stateexplicit = PB.VariableAggregator(stateexplicit, stateexplicit_cr, modeldata, arrays_idx),
+        stateexplicit_deriv = PB.VariableAggregator(stateexplicit_deriv, stateexplicit_cr, modeldata, arrays_idx),
+        total = PB.VariableAggregator(total, total_cr, modeldata, arrays_idx),
+        total_deriv = PB.VariableAggregator(total_deriv, total_cr, modeldata, arrays_idx),
+        constraints = PB.VariableAggregator(constraint, constraint_cr, modeldata, arrays_idx),
+        state = PB.VariableAggregator(state, state_cr, modeldata, arrays_idx),
+        hostdep = PB.VariableAggregatorNamed(hostdep, modeldata, arrays_idx)
     )
 
     return sv
@@ -370,7 +366,7 @@ function set_default_solver_view!(
     PB.check_modeldata(model, modeldata)  
 
     # create a default SolverView for the entire model (from modeldata.cellranges_all)
-    sv = create_solver_view(model, modeldata)
+    sv = SolverView(model, modeldata, 1)
    
     modeldata.solver_view_all = sv
     
