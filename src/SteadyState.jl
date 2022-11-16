@@ -525,14 +525,15 @@ end
 Function object to calculate residual for a first-order Euler implicit timestep and adapt to NLsolve interface
 
 Given:
-- ODE time derivative `du(t)/dt` supplied at construction time by function object `modelode(du, u, p, t)`
-- ODE Jacobian `d(du(t)/dt)/du` supplied at construction time by function  object `jacode(J, u, p, t)`
+- ODE time derivative `du(t)/dt` supplied at by function object `modelode(du, u, p, t)`
+- ODE Jacobian `Jode(u) = d(du(t)/dt)/du` supplied by function object `jacode(J, u, p, t)`
 - `t`, `delta_t`, `previous_u` set by `set_step!` before each function call.
 
 Calculates `F(u)` and `J(u)` (Jacobian of `F`), where `F(u)` is the residual for a timestep `delta_t` to time `t`
 from state `previous_u`:
 - `F(u) = (u(t) - previous_u + delta_t * du(t)/dt)`
-- `J(u) = I - deltat * d(du(t)/dt)/du`
+- `J(u) = I - deltat * Jode(u)`
+where these are available as three functions that provide `F` only, `J` only, and `F` and `J` combined.
 """
 struct FJacPTC
     modelode #::M no specialization to minimise recompilation
@@ -575,18 +576,7 @@ function (jn::FJacPTC)(F, J::Union{SparseArrays.SparseMatrixCSC, Nothing}, u)
   
         jn.jacode(J, u, nothing, jn.t[])
         # convert J  = I - deltat * odeJac  
-        for j in 1:size(J)[2]
-            # idx is index in SparseMatrixCSC compressed storage, i is row index
-            for idx in J.colptr[j]:(J.colptr[j+1]-1)
-                i = J.rowval[idx]
-
-                J.nzval[idx] = -jn.delta_t[]*J.nzval[idx]                
-
-                if i == j
-                    J.nzval[idx] += 1.0
-                end                
-            end
-        end
+        backwards_euler_jac!(J, jn.delta_t[])
     end
 
     return nothing
@@ -664,17 +654,18 @@ end
 """
     FJacSplitPTC
 
-Function object to calculate residual for a first-order Euler implicit timestep and adapt to NLsolve interface
+Function object to calculate residual for a first-order Euler implicit timestep from ODE and adapt to NLsolve interface
 
 Given:
-- ODE time derivative `du(t)/dt` supplied at construction time by function object `modelode(du, u, p, t)`
-- ODE Jacobian `d(du(t)/dt)/du` supplied at construction time by function  object `jacode(J, u, p, t)`
+- ODE time derivative `du(t)/dt` and ODE Jacobian `Jode(u) = d(du(t)/dt)/du` supplied by a function object `modeljacode`,
+  which should be callable as both `modeljacode(du, u, nothing, t)` and `modeljacode(du, Jode, u, nothing, t)`
 - `t`, `delta_t`, `previous_u` set by `set_step!` before each function call.
 
 Calculates `F(u)` and `J(u)` (Jacobian of `F`), where `F(u)` is the residual for a timestep `delta_t` to time `t`
 from state `previous_u`:
 - `F(u) = (u(t) - previous_u + delta_t * du(t)/dt)`
-- `J(u) = I - deltat * d(du(t)/dt)/du`
+- `J(u) = I - deltat * Jode(u)`
+where these are available as three functions that provide `F` only, `J` only, and `F` and `J` combined.
 """
 struct FJacSplitPTC
     modeljacode # ::M # no specialization as this seems to cause compiler issues with Julia 1.7.3
@@ -727,17 +718,26 @@ function (jn::FJacSplitPTC)(F::Union{Nothing, AbstractVector}, J::SparseArrays.S
     
     jn.modeljacode(jn.du_worksp, J, u, nothing, jn.t[])
 
+    delta_t = jn.delta_t[]::Float64 # Julia 1.8.2 type stability workaround
+
     if !isnothing(F)
-        F .=  (u .- jn.previous_u - jn.delta_t[].*jn.du_worksp)
+        F .=  (u .- jn.previous_u - delta_t.*jn.du_worksp)
     end
 
-    # convert J  = I - deltat * odeJac  
+    # convert J  = I - deltat * odeJac
+    backwards_euler_jac!(J, delta_t)
+
+    return nothing
+end
+
+function backwards_euler_jac!(J::SparseArrays.SparseMatrixCSC, delta_t)
+    # convert J  = I - deltat * J
     for j in 1:size(J)[2]
         # idx is index in SparseMatrixCSC compressed storage, i is row index
         for idx in J.colptr[j]:(J.colptr[j+1]-1)
             i = J.rowval[idx]
 
-            J.nzval[idx] = -jn.delta_t[]*J.nzval[idx]                
+            J.nzval[idx] = -delta_t*J.nzval[idx]          
 
             if i == j
                 J.nzval[idx] += 1.0
@@ -748,7 +748,7 @@ function (jn::FJacSplitPTC)(F::Union{Nothing, AbstractVector}, J::SparseArrays.S
     return nothing
 end
 
-function nlsolveF_SplitPTC(ms::SplitDAE.ModelSplitDAE, initial_state_outer, jacouter_prototype)
+function nlsolveF_SplitPTC(modeljacode, initial_state_outer, jacouter_prototype)
 
     tss = Ref(NaN)
     deltat = Ref(NaN)
@@ -756,7 +756,7 @@ function nlsolveF_SplitPTC(ms::SplitDAE.ModelSplitDAE, initial_state_outer, jaco
     du_worksp = similar(initial_state_outer)
  
     # SplitDAE.ModelSplitDAE provides both ODE and Jacobian functions
-    ssFJ! = FJacSplitPTC(ms, tss, deltat, previous_u, du_worksp)
+    ssFJ! = FJacSplitPTC(modeljacode, tss, deltat, previous_u, du_worksp)
 
     # function + sparse Jacobian with sparsity pattern defined by jac_prototype
     nldf = NLsolve.OnceDifferentiable(ssFJ!, ssFJ!, ssFJ!, similar(initial_state_outer), similar(initial_state_outer), copy(jacouter_prototype))
