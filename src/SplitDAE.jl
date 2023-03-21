@@ -530,9 +530,19 @@ struct ModelJacForwardDiffCell{MD}
     modelderiv::MD
 end
 
+# TODO ForwardDiff doesn't provide an API to get jacobian without setting Dual number 'tag'
+@static if isdefined(ForwardDiff, :extract_jacobian)
+    const _forwarddiff_extract_jacobian = ForwardDiff.extract_jacobian # ForwardDiff v < 0.10.35
+elseif isdefined(ForwardDiff, :ForwardDiffStaticArraysExt) && isdefined(ForwardDiff.ForwardDiffStaticArraysExt, :extract_jacobian) # ForwardDiff >= 0.10.35, Julia < 1.9
+    const _forwarddiff_extract_jacobian = ForwardDiff.ForwardDiffStaticArraysExt.extract_jacobian
+else
+    # ForwardDiff >= 0.10.35, Julia >= 1.9
+    const _forwarddiff_extract_jacobian = Base.get_extension(ForwardDiff, :ForwardDiffStaticArraysExt).extract_jacobian
+end
+
 function (mjfd::ModelJacForwardDiffCell)(x::StaticArrays.SVector)
     # TODO ForwardDiff doesn't provide an API to get jacobian without setting Dual number 'tag'
-    return ForwardDiff.extract_jacobian(Nothing, ForwardDiff.static_dual_eval(Nothing, mjfd.modelderiv, x), x)
+    return _forwarddiff_extract_jacobian(Nothing, ForwardDiff.static_dual_eval(Nothing, mjfd.modelderiv, x), x)
 end
 
 # calculate lu factorization of sparse Jacobian for a single cell
