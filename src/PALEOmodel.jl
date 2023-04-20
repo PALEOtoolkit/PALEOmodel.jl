@@ -4,6 +4,7 @@ import PALEOboxes as PB
 
 # autodiff setup
 import ForwardDiff
+import ForwardDiff
 import SparsityTracing
 
 import TimerOutputs: @timeit, @timeit_debug
@@ -52,5 +53,8 @@ include("OutputWriters.jl")
 include("PlotRecipes.jl")
 
 include("ReactionNetwork.jl")
+
+include("ForwardDiffWorkarounds.jl")
+
 
 end
