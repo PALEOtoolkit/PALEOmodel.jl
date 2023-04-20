@@ -413,13 +413,7 @@ set_cell!(cj::CellJacobian, celln, lastS, t, deltat) = set_cell!(cj.cellresidual
     # )
 
     # TODO workaround for a limitation of ForwardDiff - can't specify a jacobian with no 'tag' when using StaticArrays
-    return vector_mode_jacobian_notag(cj.cellresidual, newSnorm)
-end
-
-@inline function vector_mode_jacobian_notag(f, x::StaticArrays.StaticArray)
-    # T = typeof(Tag(f, eltype(x)))
-    T = Nothing
-    return ForwardDiff.extract_jacobian(T, ForwardDiff.static_dual_eval(T, f, x), x)
+    return PALEOmodel.ForwardDiffWorkarounds.vector_mode_jacobian_notag(cj.cellresidual, newSnorm)
 end
 
 end # module
