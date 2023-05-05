@@ -12,6 +12,7 @@ import PALEOmodel
 import DataFrames
 import FileIO
 import JLD2
+import NCDatasets
 
 import Infiltrator # Julia debugger
 
@@ -585,7 +586,7 @@ Save to `filename` in JLD2 format (NB: filename must either have no extension or
 """
 function save_jld2(output::OutputMemory, filename)
 
-    filename = _check_filename_jld2(filename)
+    filename = _check_filename_ext(filename, ".jld2")
 
     # create a temporary copy to omit _all_vars
     output_novars = copy(output.domains)
@@ -622,7 +623,7 @@ julia> output = PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.Out
 """
 function load_jld2!(output::OutputMemory, filename)
 
-    filename = _check_filename_jld2(filename)
+    filename = _check_filename_ext(filename, ".jld2")
 
     @info "loading from $filename ..."
 
@@ -637,17 +638,6 @@ function load_jld2!(output::OutputMemory, filename)
 end
 
 
-function _check_filename_jld2(filename)
-    froot, fext = splitext(filename)
-    if isempty(fext)
-        fext = ".jld2"
-    elseif fext != ".jld2"
-        error("filename '$filename' must have extension .jld2")
-    end
-    filename = froot*fext
-
-    return filename
-end
 
 "append output2 to the end of output1"
 function Base.append!(output1::OutputMemory, output2::OutputMemory)
@@ -785,6 +775,104 @@ function domain_variable_name(varnamefull; defaultdomainname=nothing)
     end
 
     return domainname, varname
+end
+
+###############################################
+# netCDF i/o
+###############################################
+
+
+"""
+    save_netcdf(output::OutputMemory, filename)
+
+Save to `filename` in netcdf format (NB: filename must either have no extension or have extension `.nc`)
+"""
+function save_netcdf(output::OutputMemory, filename)
+
+    filename = _check_filename_ext(filename, ".nc")
+
+    @info "saving to $filename ..."
+
+    @Infiltrator.infiltrate
+    NCDatasets.NCDataset(filename, "c") do ds
+        for (domname, dom) in output.domains
+            # "Domain name"
+            # name::String
+            # "Model output for this Domain"
+            # data::DataFrames.DataFrame
+            # "record coordinate"
+            # coords_record::Symbol
+            # "Domain data_dims"
+            # data_dims::Vector{PB.NamedDimension}
+            # "Variable metadata (attributes) (metadata[varname] -> attributes::Dict{Symbol, Any})"
+            # metadata::Dict{String, Dict{Symbol, Any}}
+            # "Domain Grid (if any)"
+            # grid::Union{PB.AbstractMesh, Nothing}
+
+            # # internal use only: all Variables in sorted order
+            # _all_vars::Vector{PB.VariableDomain}
+            # # current last record in preallocated data::DataFrame (may be less than length(data))
+            # _nrecs
+
+            @Infiltrator.infiltrate
+            dsg = NCDatasets.defGroup(ds, dom.name; attrib=[])
+            NCDatasets.defDim(dsg, "records", dom._nrecs)
+            dsg.attrib["coords_record"] =  String(dom.coords_record)
+
+            colnames = names(dom.data)
+            for vname in colnames
+                v = NCDatasets.defVar(dsg, vname, dom.data[1:dom._nrecs, vname], ("records",))
+                if haskey(dom.metadata, vname)
+                    for (aname, aval) in dom.metadata[vname]
+                        # TODO serialize/deserialize attributes with type conversion
+                        if !(typeof(aval) in (Float64, Vector{Float64}, Vector{Int})) #  Bool))
+                            aval = string(aval)
+                        end
+                        # @Infiltrator.infiltrate
+                        v.attrib[String(aname)] = aval # string(aval)
+                    end
+                end
+            end
+        end
+    end
+   
+    @info "done"
+
+    return nothing
+end
+
+"""
+    load_netcdf!(output::OutputMemory, filename)
+
+Load from `filename` in netCDF format, replacing any existing content in `output`.
+(NB: filename must either have no extension or have extension `.nc`).
+
+# Example
+```julia
+julia> output = PALEOmodel.OutputWriters.load_netcdf!(PALEOmodel.OutputWriters.OutputMemory(), "savedoutput.nc")
+```
+"""
+function load_netcdf!(output::OutputMemory, filename)
+
+    filename = _check_filename_ext(filename, ".nc")
+
+    @info "loading from $filename ..."
+
+    error("TODO")
+
+    return output
+end
+
+function _check_filename_ext(filename, requiredext)
+    froot, fext = splitext(filename)
+    if isempty(fext)
+        fext = requiredext
+    elseif fext != requiredext
+        error("filename '$filename' must have extension $requiredext")
+    end
+    filename = froot*fext
+
+    return filename
 end
 
 
