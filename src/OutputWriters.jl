@@ -793,7 +793,6 @@ function save_netcdf(output::OutputMemory, filename)
 
     @info "saving to $filename ..."
 
-    @Infiltrator.infiltrate
     NCDatasets.NCDataset(filename, "c") do ds
         for (domname, dom) in output.domains
             # "Domain name"
@@ -814,24 +813,57 @@ function save_netcdf(output::OutputMemory, filename)
             # # current last record in preallocated data::DataFrame (may be less than length(data))
             # _nrecs
 
-            @Infiltrator.infiltrate
+            # @Infiltrator.infiltrate
             dsg = NCDatasets.defGroup(ds, dom.name; attrib=[])
             NCDatasets.defDim(dsg, "records", dom._nrecs)
             dsg.attrib["coords_record"] =  String(dom.coords_record)
 
+            spatial_dimnames = grid_to_netcdf!(dsg, dom.grid)
+
             colnames = names(dom.data)
             for vname in colnames
-                v = NCDatasets.defVar(dsg, vname, dom.data[1:dom._nrecs, vname], ("records",))
-                if haskey(dom.metadata, vname)
-                    for (aname, aval) in dom.metadata[vname]
-                        # TODO serialize/deserialize attributes with type conversion
-                        if !(typeof(aval) in (Float64, Vector{Float64}, Vector{Int})) #  Bool))
-                            aval = string(aval)
-                        end
-                        # @Infiltrator.infiltrate
-                        v.attrib[String(aname)] = aval # string(aval)
-                    end
+                haskey(dom.metadata, vname) || error("no metadata for Variable $(dom.name).$vname")
+
+                attributes = dom.metadata[vname]
+                # see get_field above
+                data_dims = []
+                for dimname in attributes[:data_dims]
+                    idx = findfirst(d -> d.name==dimname, odom.data_dims)
+                    !isnothing(idx) ||
+                        error("Domain $(odom.name) has no dimension='$dimname' (available dimensions: $(odom.data_dims)")
+                    push!(data_dims, odom.data_dims[idx])
                 end
+            
+                field_data = attributes[:field_data]
+                space = attributes[:space]
+
+                if field_data === PB.ScalarData
+                    vdata = dom.data[1:dom._nrecs, vname]
+                    @info "writing Variable $(dom.name).$vname dframe eltype $(eltype(vdata)) space $space"
+                    
+                    vnameorig = vname
+                    vname = replace(vname, "/"=>"%")
+                    if vname != vnameorig
+                        @info "  replaced / in name -> $vname"
+                    end
+                    if eltype(vdata) <: AbstractVector
+                        # a variable with extra dimension(s) which must be a spatial dimension 
+                        datatype = eltype(eltype(vdata))
+                        v = NCDatasets.defVar(dsg, vname, datatype, (spatial_dimnames..., "records"))
+                        attributes_to_netcdf(v, attributes)
+
+                        for (irec, vrec) in enumerate(vdata)
+                            v[:, irec] .= vrec
+                        end
+                        
+                    else
+                        v = NCDatasets.defVar(dsg, vname, vdata, ("records",))
+                        attributes_to_netcdf(v, attributes)
+                    end
+                else
+                    @info "skipping Variable $(dom.name).$vname field_data $field_data"
+                end
+                
             end
         end
     end
@@ -839,6 +871,108 @@ function save_netcdf(output::OutputMemory, filename)
     @info "done"
 
     return nothing
+end
+
+function subdomain_to_netcdf!(ds, name::AbstractString, subdom::PB.Grids.BoundarySubdomain)
+    NCDatasets.defDim(ds, "subdomain_"*name, length(subdom.indices))
+
+    v = NCDatasets.defVar(ds, "subdomain_"*name, subdom.indices .- 1 , ("subdomain_"*name,)) # convert to zero based
+    v.attrib["subdomain_type"] = "BoundarySubdomain"
+end
+
+function subdomain_to_netcdf!(ds, name::AbstractString, subdom::PB.Grids.InteriorSubdomain)
+    NCDatasets.defDim(ds, "subdomain_"*name, length(subdom.indices))
+
+    v = NCDatasets.defVar(ds, "subdomain_"*name, subdom.indices .- 1, ("subdomain_"*name,)) # convert to zero based
+    v.attrib["subdomain_type"] = "InteriorSubdomain"
+end
+
+function grid_to_netcdf!(ds, grid::Nothing)
+    ds.attrib["PALEOGridType"] = "Nothing"
+
+    return ()
+end
+
+function attributes_to_netcdf(v, attributes)
+                       
+    for (aname, aval) in attributes
+        # TODO serialize/deserialize attributes with type conversion
+        if !(typeof(aval) in (Float64, Vector{Float64}, Vector{Int})) #  Bool))
+            aval = string(aval)
+        end
+        # @Infiltrator.infiltrate
+        v.attrib[String(aname)] = aval # string(aval)
+    end
+
+    return nothing
+end
+
+function grid_to_netcdf!(ds, grid::PB.Grids.UnstructuredVectorGrid)
+    ds.attrib["PALEOGridType"] = "UnstructuredVectorGrid"
+
+    # @Infiltrator.infiltrate
+    # cells
+    dimnames = String[]
+    for (dimname, dimsize) in get_grid_dims(grid)
+        push!(dimnames, dimname)
+        NCDatasets.defDim(ds, dimname, dimsize)
+    end
+
+    # named cells
+    if !isempty(grid.cellnames)    
+        cellnames = [String(k) for (k, v) in grid.cellnames]
+        cellnames_indices = [v for (k, v) in grid.cellnames]
+        NCDatasets.defDim(ds, "labelledcells", length(cellnames))
+        v = NCDatasets.defVar(ds, "labelledcells", cellnames_indices .- 1, ("labelledcells",)) # NB: zero-based
+        v.attrib["compress"] = "cells"
+        v = NCDatasets.defVar(ds, "cellnames", cellnames, ("labelledcells",))
+    end
+    
+    # subdomains
+    for (name, subdom) in grid.subdomains
+        subdomain_to_netcdf!(ds, name, subdom)
+    end
+
+    return ("cells", )
+end
+
+function grid_to_netcdf!(ds, grid::PB.Grids.UnstructuredColumnGrid)
+    ds.attrib["PALEOGridType"] = "UnstructuredColumnGrid"
+
+    # cells
+    dimnames = String[]
+    for (dimname, dimsize) in get_grid_dims(grid)
+        push!(dimnames, dimname)
+        NCDatasets.defDim(ds, dimname, dimsize)
+    end
+
+    # contiguous ragged array representation
+    v = NCDatasets.defVar(ds, "cells_in_column", [length(ic) for ic in grid.Icolumns], ("columns",)) 
+    v.attrib["sample_dimension"] = "cells"
+    Icolumns = reduce(vcat, grid.Icolumns)
+    v = NCDatasets.defVar(ds, "Icolumns", Icolumns .- 1, ("cells",)) # NB: zero-based
+
+    # optional column labels
+    if !isempty(grid.columnnames)    
+        v = NCDatasets.defVar(ds, "columnnames", String.(grid.columnnames), ("columns",))
+    end
+
+    # subdomains
+    for (name, subdom) in grid.subdomains
+        subdomain_to_netcdf!(ds, name, subdom)
+    end
+
+    return ("cells", )
+end
+
+
+
+function get_grid_dims(grid::PB.Grids.UnstructuredVectorGrid)
+    return ["cells"=>grid.ncells]
+end
+
+function get_grid_dims(grid::PB.Grids.UnstructuredColumnGrid)
+    return ["cells"=>grid.ncells, "columns"=>length(grid.Icolumns)]
 end
 
 """
