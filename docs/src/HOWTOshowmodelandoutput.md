@@ -174,7 +174,10 @@ Here `i=10` selects a section at longitude corresponding to model grid cells wit
 
 ## Save and load output
 
-Model output can be saved and loaded using the [`PALEOmodel.OutputWriters.save_jld2`](@ref) and [`PALEOmodel.OutputWriters.load_jld2!`](@ref) methods.
+Model output can be saved and loaded using the [`PALEOmodel.OutputWriters.save_netcdf`](@ref) and [`PALEOmodel.OutputWriters.load_netcdf!`](@ref) methods.
+
+The [`PALEOmodel.OutputWriters.save_jld2`](@ref) and [`PALEOmodel.OutputWriters.load_jld2!`](@ref) methods are still available as these files
+will not remain compatible with future PALEO versions.
 
 ## Export output to a CSV file
 
