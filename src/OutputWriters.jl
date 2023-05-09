@@ -788,7 +788,13 @@ end
 """
     save_netcdf(output::OutputMemory, filename)
 
-Save to `filename` in netcdf format (NB: filename must either have no extension or have extension `.nc`)
+Save to `filename` in netcdf4 format (NB: filename must either have no extension or have extension `.nc`)
+
+# Notes on structure of netcdf output
+- Each PALEO Domain is written to a netcdf4 group. These can be read into a Python xarray using the `group=<domainname>` argument to `open_dataset`.
+- Isotope-valued variables (`field_data = PB.IsotopeLinear`) are written with an extra `isotopelinear` netCDF dimension, containing the variable `total` and `delta`.
+- Any '/' characters in PALEO variables are substited for '%' in the netcdf name.
+
 """
 function save_netcdf(output::OutputMemory, filename; check_ext=true, add_coordinates=false)
 
