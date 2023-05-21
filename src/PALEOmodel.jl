@@ -88,8 +88,8 @@ function run_example_workload()
     # save and load
     tmpfile = tempname(; cleanup=true) 
     output = paleorun.output
-    PALEOmodel.OutputWriters.save_jld2(output, tmpfile)
-    load_output = PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
+    PALEOmodel.OutputWriters.save_netcdf(output, tmpfile; check_ext=false)
+    load_output = PALEOmodel.OutputWriters.load_netcdf!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile; check_ext=false)
 
     # FieldArray
     O_array = PALEOmodel.get_array(load_output, "global.O")
