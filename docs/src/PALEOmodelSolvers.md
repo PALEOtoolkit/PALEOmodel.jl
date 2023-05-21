@@ -8,6 +8,7 @@ CurrentModule = PALEOmodel
 ```
 ```@docs
 initialize!
+set_statevar_from_output!
 ```
 
 ## DifferentialEquations solvers

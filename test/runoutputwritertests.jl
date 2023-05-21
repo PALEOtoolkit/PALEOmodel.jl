@@ -60,7 +60,7 @@ end
 
 end
 
-@testset "SaveLoad" begin
+@testset "SaveLoad_jld2" begin
 
     model, modeldata, all_vars, output =  create_test_model_output(2)
     all_values = all_vars.values
@@ -74,6 +74,26 @@ end
     PALEOmodel.OutputWriters.save_jld2(output, tmpfile)
 
     load_output = PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
+
+    O_array = PALEOmodel.get_array(load_output, "global.O")
+    @test O_array.values == [2e19, 4e19]
+
+end
+
+@testset "SaveLoad_netcdf" begin
+
+    model, modeldata, all_vars, output =  create_test_model_output(2)
+    all_values = all_vars.values
+
+    all_values.global.O .= [2e19]
+    PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
+    all_values.global.O .= [4e19]
+    PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
+
+    tmpfile = tempname(; cleanup=true) 
+    PALEOmodel.OutputWriters.save_netcdf(output, tmpfile)
+
+    load_output = PALEOmodel.OutputWriters.load_netcdf!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
 
     O_array = PALEOmodel.get_array(load_output, "global.O")
     @test O_array.values == [2e19, 4e19]

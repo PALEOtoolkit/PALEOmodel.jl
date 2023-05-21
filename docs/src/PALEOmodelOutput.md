@@ -64,6 +64,11 @@ CurrentModule = PALEOmodel.OutputWriters
 ```@docs
 OutputMemory
 OutputMemoryDomain
+```
+
+```@docs
+save_netcdf
+load_netcdf!
 save_jld2
 load_jld2!
 ```
