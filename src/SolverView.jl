@@ -49,9 +49,12 @@ mutable struct SolverView{
 
     hostdep::VA7
 
+    pack_domain::String
+
     function SolverView(
         etype::Type{T};  # eltype(modeldata, arrays_idx)
-        stateexplicit::A1, stateexplicit_deriv::A2, total::A3, total_deriv::A4, constraints::A5, state::A6, hostdep::A7
+        stateexplicit::A1, stateexplicit_deriv::A2, total::A3, total_deriv::A4, constraints::A5, state::A6, hostdep::A7,
+        pack_domain="",
     ) where {T, A1, A2, A3, A4, A5, A6, A7}
         return new{T, A1, A2, A3, A4, A5, A6, A7}(
             stateexplicit,
@@ -64,7 +67,8 @@ mutable struct SolverView{
             Vector{Float64}(),
             state,
             Vector{Float64}(),
-            hostdep
+            hostdep,
+            pack_domain,
         )
     end
 end
@@ -75,7 +79,7 @@ Base.eltype(::Type{SolverView{T, A1, A2, A3, A4, A5, A6, A7}}) where {T, A1, A2,
 function Base.show(io::IO, sv::SolverView)
     print(
         io,
-        "SolverView{$(eltype(sv)), ...}",
+        "SolverView{$(eltype(sv)), ...} pack_domain: $(sv.pack_domain) ",
         "(stateexplicit $(length(sv.stateexplicit)), "*
         "total $(length(sv.total)), "*
         "constraints $(length(sv.constraints)), "*
@@ -86,7 +90,7 @@ function Base.show(io::IO, sv::SolverView)
 end
 "multiline form"
 function Base.show(io::IO, m::MIME"text/plain", sv::SolverView)
-    println(io, "SolverView{$(eltype(sv)), ...}:")
+    println(io, "SolverView{$(eltype(sv)), ...} pack_domain: $(sv.pack_domain):")
     for f in (:stateexplicit, :stateexplicit_deriv, :total, :total_deriv, :constraints, :state, :hostdep)
         print(io, String(f)*":  ")
         va = getfield(sv, f)
@@ -224,10 +228,12 @@ set_tforce!(sv::SolverView, t) = PB.set_values!(sv.hostdep, Val(:global), Val(:t
 
 SolverView(
     model, modeldata::PB.AbstractModelData, arrays_idx::Int;
+    pack_domain="",
+    pack_vfunction=[PB.VF_StateExplicit],
     verbose=true,
 ) = SolverView(
         model, modeldata, arrays_idx, modeldata.cellranges_all;
-        indices_from_cellranges=false, verbose=verbose,
+        indices_from_cellranges=false, pack_domain, pack_vfunction, verbose,
     )
 
 function SolverView(
@@ -237,6 +243,8 @@ function SolverView(
     exclude_var_nameroots=[],
     hostdep_all=true,
     reallocate_hostdep_eltype=Float64,
+    pack_domain="",
+    pack_vfunction=[PB.VF_StateExplicit],
 )
  
     io = IOBuffer() # only displayed if verbose==true
@@ -246,22 +254,46 @@ function SolverView(
     length(check_domains) == length(unique(check_domains)) ||
         throw(ArgumentError("SolverView: cellranges contain duplicate Domains"))
 
+    if !isempty(pack_domain) && indices_from_cellranges
+        error("SolverView: cannot specify both pack_domain and indices_from_cellranges")
+    end
+
     stateexplicit, stateexplicit_deriv, stateexplicit_cr = PB.VariableDomain[], PB.VariableDomain[], []
+    packed_stateexplicit, packed_stateexplicit_deriv = PB.VariableDomain[], PB.VariableDomain[]
     total, total_deriv, total_cr = PB.VariableDomain[], PB.VariableDomain[], []
-    constraint, constraint_cr = PB.VariableDomain[], []
-    state, state_cr = PB.VariableDomain[], []
+    packed_total, packed_total_deriv = PB.VariableDomain[], PB.VariableDomain[]
+    constraint, constraint_cr, packed_constraint = PB.VariableDomain[], [], PB.VariableDomain[]
+    state, state_cr, packed_state = PB.VariableDomain[], [], PB.VariableDomain[]
     hostdep = PB.VariableDomain[]
+
+    pack_cr = []
+
+    function split_packed_vars(do_pack, vars)
+        var_vec, packed_var_vec = PB.VariableDomain[], PB.VariableDomain[]
+        for v in vars
+            if do_pack && (PB.get_attribute(v, :space) == PB.CellSpace)
+                push!(packed_var_vec, v)
+            else
+                push!(var_vec, v)
+            end
+        end
+        return var_vec, packed_var_vec
+    end
 
     report = []
     for cr in cellranges
         dom = cr.domain              
         crreport = Any[dom.name, cr.operatorID]
-        for (vfunction, var_vec, cr_vec, var_deriv_vec, deriv_suffix) in [
-            (PB.VF_StateExplicit,  stateexplicit,  stateexplicit_cr,   stateexplicit_deriv,    "_sms"),
-            (PB.VF_Total,          total,          total_cr,           total_deriv,            "_sms"),
-            (PB.VF_Constraint,     constraint,     constraint_cr,      nothing,                ""),
-            (PB.VF_State,          state,          state_cr,           nothing,                ""),
-            (PB.VF_Undefined,      hostdep,        nothing,            nothing,                ""),
+        do_pack_domain = (dom.name == pack_domain)  # NB: Domains of cellranges are unique so this will be true for at most one cr in cellranges
+        if do_pack_domain
+            pack_cr = [PB.CellRange(dom, cr.operatorID, i) for i in cr.indices]
+        end
+        for (vfunction, var_vec, cr_vec, var_deriv_vec, deriv_suffix, packed_var_vec, packed_var_deriv_vec) in [
+            (PB.VF_StateExplicit,  stateexplicit,  stateexplicit_cr,   stateexplicit_deriv,    "_sms",  packed_stateexplicit,   packed_stateexplicit_deriv),
+            (PB.VF_Total,          total,          total_cr,           total_deriv,            "_sms",  packed_total,           packed_total_deriv),
+            (PB.VF_Constraint,     constraint,     constraint_cr,      nothing,                "",      packed_constraint,      nothing),
+            (PB.VF_State,          state,          state_cr,           nothing,                "",      packed_state,           nothing),
+            (PB.VF_Undefined,      hostdep,        nothing,            nothing,                "",      nothing,                nothing),
         ]
 
             (vars, vars_deriv) = 
@@ -272,26 +304,47 @@ function SolverView(
                     exclude_var_nameroots=exclude_var_nameroots
                 )
 
-            if isnothing(var_deriv_vec)
+            do_pack_var = do_pack_domain && (vfunction in pack_vfunction)
+
+            if vfunction == PB.VF_Undefined
+                sort!(vars; by=v->PB.fullname(v))
+                append!(var_vec, vars) # no packing possible
+                packed_vars = PB.VariableDomain[]
+            elseif isnothing(var_deriv_vec)
                 # sort by name: VF_Constraint and VF_State are unpaired in general, but in some cases will have a convenient ordering based on name
                 sort!(vars; by=v->PB.fullname(v))
+                vars, packed_vars = split_packed_vars(do_pack_var, vars)
                 append!(var_vec, vars)
+                append!(packed_var_vec, packed_vars)               
             else
+                vars, packed_vars = split_packed_vars(do_pack_var, vars)
                 append!(var_vec, vars)
+                append!(packed_var_vec, packed_vars)
+                vars_deriv, packed_vars_deriv = split_packed_vars(do_pack_var, vars_deriv)
                 append!(var_deriv_vec, vars_deriv)
+                append!(packed_var_deriv_vec, packed_vars_deriv)
             end
             if !isnothing(cr_vec)
                 append!(cr_vec, [indices_from_cellranges ? cr : nothing for v in vars])
             end
 
-            push!(crreport, length(vars))
+            if !do_pack_domain
+                push!(crreport, length(vars))
+            else
+                push!(crreport, (length(vars), length(packed_vars)))
+            end
         end
         push!(report, crreport)    
-    end    
-    push!(report, ["Total", "-", length(stateexplicit), length(total), length(constraint), length(state), length(hostdep)])
+    end
+    n_stateexplicit = length(stateexplicit) + length(packed_stateexplicit)
+    n_total = length(total) + length(packed_total)
+    n_constraint = length(constraint) + length(packed_constraint)
+    n_state = length(state) + length(packed_state)
+    n_hostdep = length(hostdep)
+    push!(report, ["Total", "-", n_stateexplicit, n_total, n_constraint, n_state, n_hostdep])
 
-    n_state_vars = length(stateexplicit) + length(state)
-    n_equations = length(stateexplicit) + length(total) + length(constraint)
+    n_state_vars = n_stateexplicit + n_state
+    n_equations = n_stateexplicit + n_total + n_constraint
 
     if verbose        
         colnames = ["Domain", "operatorID", "VF_StateExplicit", "VF_Total", "VF_Constraint", "VF_State", "VF_Undefined"]
@@ -305,10 +358,10 @@ function SolverView(
             println(io, "    ", join(rpad.(string.(r), colwidths)))
         end
         println(io, "    ", sep)
-        println(io, "  n_state_vars $n_state_vars  (stateexplicit $(length(stateexplicit)) "*
+        println(io, "  n_state_vars $n_state_vars  (stateexplicit $n_stateexplicit "*
             "+ state $(length(state)))")
-        println(io, "  n_equations $n_equations  (stateexplicit $(length(stateexplicit)) "*
-            "+ total $(length(total)) + constraint $(length(constraint)))")             
+        println(io, "  n_equations $n_equations  (stateexplicit $n_stateexplicit "*
+            "+ total $n_total + constraint $n_constraint)")             
     end
 
     n_state_vars == n_equations || 
@@ -338,35 +391,37 @@ function SolverView(
     verbose && @info String(take!(io))  
 
     sv = SolverView(
-        eltype(modeldata, arrays_idx),
-        stateexplicit = PB.VariableAggregator(stateexplicit, stateexplicit_cr, modeldata, arrays_idx),
-        stateexplicit_deriv = PB.VariableAggregator(stateexplicit_deriv, stateexplicit_cr, modeldata, arrays_idx),
-        total = PB.VariableAggregator(total, total_cr, modeldata, arrays_idx),
-        total_deriv = PB.VariableAggregator(total_deriv, total_cr, modeldata, arrays_idx),
-        constraints = PB.VariableAggregator(constraint, constraint_cr, modeldata, arrays_idx),
-        state = PB.VariableAggregator(state, state_cr, modeldata, arrays_idx),
-        hostdep = PB.VariableAggregatorNamed(hostdep, modeldata, arrays_idx)
+        eltype(modeldata, arrays_idx);
+        stateexplicit = PB.VariableAggregator(stateexplicit, stateexplicit_cr, modeldata, arrays_idx, packed_stateexplicit, pack_cr),
+        stateexplicit_deriv = PB.VariableAggregator(stateexplicit_deriv, stateexplicit_cr, modeldata, arrays_idx, packed_stateexplicit_deriv, pack_cr),
+        total = PB.VariableAggregator(total, total_cr, modeldata, arrays_idx, packed_total, pack_cr),
+        total_deriv = PB.VariableAggregator(total_deriv, total_cr, modeldata, arrays_idx, packed_total, pack_cr),
+        constraints = PB.VariableAggregator(constraint, constraint_cr, modeldata, arrays_idx, packed_constraint, pack_cr),
+        state = PB.VariableAggregator(state, state_cr, modeldata, arrays_idx, packed_state, pack_cr),
+        hostdep = PB.VariableAggregatorNamed(hostdep, modeldata, arrays_idx),
+        pack_domain,
     )
 
     return sv
 end
 
 """
-    set_default_solver_view!(model, modeldata)
+    set_default_solver_view!(model, modeldata [; pack_domain="", pack_vfunction=[PB.VF_StateExplicit]])
 
-(Optional, used to set `modeldata.solver_view_all` to a [`SolverView`](@ref)) for the whole
-model, and set `modeldata.hostdep_data` to any non-state-variable host dependent Variables)
+Optional, used to set `modeldata.solver_view_all` to a [`SolverView`](@ref)) for the whole
+model, and set `modeldata.hostdep_data` to any non-state-variable host dependent Variables
 
-`reallocate_hostdep_eltype` a data type to reallocate `hostdep_data` eg to replace any
-AD types.
+Set `pack_domain` to a Domain name to pack CellSpace variables by cell for that Domain
 """
 function set_default_solver_view!(
-    model::PB.Model, modeldata::PB.AbstractModelData,
+    model::PB.Model, modeldata::PB.AbstractModelData;
+    pack_domain="",
+    pack_vfunction=[PB.VF_StateExplicit],
 )
     PB.check_modeldata(model, modeldata)  
 
     # create a default SolverView for the entire model (from modeldata.cellranges_all)
-    sv = SolverView(model, modeldata, 1)
+    sv = SolverView(model, modeldata, 1; pack_domain, pack_vfunction)
    
     modeldata.solver_view_all = sv
     

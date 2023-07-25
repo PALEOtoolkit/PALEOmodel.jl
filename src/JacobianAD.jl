@@ -70,6 +70,8 @@ function jac_config_ode(
     iszero(PALEOmodel.num_total(modeldata.solver_view_all)) ||
         throw(ArgumentError("model contains implicit variables, solve as a DAE"))
    
+    pack_domain = modeldata.solver_view_all.pack_domain
+
     # generate arrays with ODE layout for model Variables
     state_sms_vars_data = similar(PALEOmodel.get_statevar_sms(modeldata.solver_view_all))
     state_vars_data = similar(PALEOmodel.get_statevar(modeldata.solver_view_all))
@@ -85,7 +87,7 @@ function jac_config_ode(
 
         PB.add_arrays_data!(model, modeldata, eltype(jacconf), "jac_ad"; use_base_vars)
         arrays_idx_jac_ad = PB.num_arrays(modeldata)
-        jac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jac_ad) # Variables from whole model
+        jac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jac_ad; pack_domain) # Variables from whole model
         jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_jac_ad, jac_cellranges; generated_dispatch)
 
         @info "  using ForwardDiff dense Jacobian chunksize=$(ForwardDiff.chunksize(chunk)))"
@@ -112,7 +114,7 @@ function jac_config_ode(
         @timeit "calcJacobianSparsitySparsityTracing!" begin
         jac_proto_unfilled = calcJacobianSparsitySparsityTracing!(
             model, modeldata, initial_state, jac_ad_t_sparsity;
-            jac_cellranges, use_base_vars,
+            jac_cellranges, use_base_vars, pack_domain,
         ) 
         end # timeit
         jac_prototype = SparseUtils.fill_sparse_jac(jac_proto_unfilled; fill_diagonal=fill_jac_diagonal)
@@ -126,7 +128,7 @@ function jac_config_ode(
         arrays_idx_jac_ad = PB.num_arrays(modeldata)
         end # timeit
         @timeit "jac_solverview" begin
-        jac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jac_ad) # Variables from whole model
+        jac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jac_ad; pack_domain) # Variables from whole model
         end # timeit
         @timeit "jac_dispatchlists" begin
         jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_jac_ad, jac_cellranges; generated_dispatch)
@@ -182,6 +184,8 @@ function jac_config_dae(
     @info "jac_config_dae: jac_ad=$jac_ad"
 
     PB.check_modeldata(model, modeldata)
+
+    pack_domain = modeldata.solver_view_all.pack_domain
     
     # generate arrays with ODE layout for model Variables
     state_sms_vars_data = similar(PALEOmodel.get_statevar_sms(modeldata.solver_view_all))
@@ -202,7 +206,7 @@ function jac_config_dae(
         jacconf = ForwardDiff.JacobianConfig(nothing, state_sms_vars_data, state_vars_data, chunk)
         PB.add_arrays_data!(model, modeldata, eltype(jacconf), "jac_ad"; use_base_vars)
         arrays_idx_jac_ad = PB.num_arrays(modeldata)
-        jac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jac_ad) # Variables from whole model
+        jac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jac_ad; pack_domain) # Variables from whole model
         jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_jac_ad, jac_cellranges; generated_dispatch)
 
         if iszero(PALEOmodel.num_total(modeldata.solver_view_all))
@@ -245,7 +249,7 @@ function jac_config_dae(
         @info "  using ForwardDiff sparse Jacobian with sparsity calculated at t=$jac_ad_t_sparsity"  
         jac_proto_unfilled = calcJacobianSparsitySparsityTracing!(
             model, modeldata, initial_state, jac_ad_t_sparsity;
-            jac_cellranges, use_base_vars,
+            jac_cellranges, use_base_vars, pack_domain,
         ) 
         jac_prototype = SparseUtils.fill_sparse_jac(jac_proto_unfilled)
         # println("using jac_prototype: ", jac_prototype)
@@ -259,7 +263,7 @@ function jac_config_dae(
 
             implicit_proto_unfilled = calcImplicitSparsitySparsityTracing!(
                 model, modeldata, initial_state, jac_ad_t_sparsity;
-                implicit_cellranges, use_base_vars,
+                implicit_cellranges, use_base_vars, pack_domain,
             )        
             implicit_prototype = SparseUtils.fill_sparse_jac(implicit_proto_unfilled, fill_diagonal=false)
             implicit_colorvec = SparseDiffTools.matrix_colors(implicit_prototype)
@@ -278,7 +282,7 @@ function jac_config_dae(
         chunksize = ForwardDiff.pickchunksize(maximum(colorvec), request_adchunksize)
         PB.add_arrays_data!(model, modeldata, ForwardDiff.Dual{Nothing, eltype(modeldata, 1), chunksize}, "jac_ad"; use_base_vars)
         arrays_idx_jac_ad = PB.num_arrays(modeldata)
-        jac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jac_ad) # Variables from whole model
+        jac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_jac_ad; pack_domain) # Variables from whole model
         jac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_jac_ad, jac_cellranges; generated_dispatch)
 
         jac_cache = SparseDiffTools.ForwardColorJacCache(
@@ -345,6 +349,7 @@ function calcJacobianSparsitySparsityTracing!(
     model::PB.Model, modeldata::PB.ModelData, initial_state, tjacsparsity; 
     jac_cellranges=modeldata.cellranges_all,
     use_base_vars=String[],
+    pack_domain="",
 )
 
     @info "calcJacobianSparsitySparsityTracing!"
@@ -355,7 +360,7 @@ function calcJacobianSparsitySparsityTracing!(
     arrays_idx_adst = PB.num_arrays(modeldata)
     end # timeit
     
-    solver_view_all_adst = PALEOmodel.SolverView(model, modeldata, arrays_idx_adst)
+    solver_view_all_adst = PALEOmodel.SolverView(model, modeldata, arrays_idx_adst; pack_domain)
     PALEOmodel.set_statevar!(solver_view_all_adst, initial_state_adst) # fix up initial state, as derivative information missing
     
     PALEOmodel.set_tforce!(solver_view_all_adst, tjacsparsity)
@@ -392,6 +397,7 @@ function calcImplicitSparsitySparsityTracing!(
     model::PB.Model, modeldata::PB.ModelData, initial_state, tsparsity; 
     implicit_cellranges=modeldata.cellranges_all,
     use_base_vars=String[],
+    pack_domain="",
 )    
     # Implicit Jacobian setup
     initial_state_adst = SparsityTracing.create_advec(initial_state)
@@ -399,7 +405,7 @@ function calcImplicitSparsitySparsityTracing!(
     PB.add_arrays_data!(model, modeldata, eltype(initial_state_adst), "sparsity_tracing_implicit"; use_base_vars)
     arrays_idx_adst = PB.num_arrays(modeldata)
     
-    solver_view_all_adst = PALEOmodel.SolverView(model, modeldata, arrays_idx_adst)
+    solver_view_all_adst = PALEOmodel.SolverView(model, modeldata, arrays_idx_adst; pack_domain)
     PALEOmodel.set_statevar!(solver_view_all_adst, initial_state_adst) # fix up initial state, as derivative information missing
 
     PALEOmodel.set_tforce!(solver_view_all_adst, tsparsity)
@@ -428,6 +434,7 @@ function directional_config(
     eltypestomap=String[],
     generated_dispatch=true,
     use_base_transfer_jacobian=false,
+    pack_domain=modeldata.solver_view_all.pack_domain,
 )
 
     directional_ad_eltype = ForwardDiff.Dual{Nothing, Float64, 1}
@@ -436,7 +443,7 @@ function directional_config(
     PB.add_arrays_data!(model, modeldata, directional_ad_eltype, "directional_deriv"; eltypemap, use_base_transfer_jacobian,)
     arrays_idx_directional = PB.num_arrays(modeldata)
 
-    directional_sv = PALEOmodel.SolverView(model, modeldata, arrays_idx_directional) # Variables from whole model
+    directional_sv = PALEOmodel.SolverView(model, modeldata, arrays_idx_directional; pack_domain) # Variables from whole model
 
     directional_dispatchlists = PB.create_dispatch_methodlists(
         model, modeldata, arrays_idx_directional, directional_cellranges; generated_dispatch,
