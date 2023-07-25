@@ -32,6 +32,7 @@ and supplying `method_barrier` (a thread barrier to add to `ReactionMethod` disp
 - `method_barrier=nothing`: thread barrier to add to dispatch lists if `threadsafe==true`
 - `expect_hostdep_varnames=["global.tforce"]`: non-state-Variable host-dependent Variable names expected
 - `SolverView_all=true`: `true` to create `modeldata.solver_view_all`
+- `pack_domain=""`: set to a Domain name to pack CellSpace variables for that Domain
 - `create_dispatchlists_all=true`: `true` to create `modeldata.dispatchlists_all`
 - `generated_dispatch=true`: `true` to autogenerate code for `modeldata.dispatchlists_all` (fast dispatch, slow compile)
 """
@@ -49,6 +50,7 @@ function initialize!(
         nothing,
     expect_hostdep_varnames=["global.tforce"],
     SolverView_all=true,
+    pack_domain="",
     create_dispatchlists_all=true,
     generated_dispatch=true,
 )
@@ -63,7 +65,7 @@ function initialize!(
 
     # Create modeldata.solver_view_all for the entire model
     if SolverView_all
-        @timeit "set_default_solver_view!" set_default_solver_view!(model, modeldata)
+        @timeit "set_default_solver_view!" set_default_solver_view!(model, modeldata; pack_domain)
     end
 
     # Initialize model Reaction data arrays (calls ReactionMethod.preparefn)
