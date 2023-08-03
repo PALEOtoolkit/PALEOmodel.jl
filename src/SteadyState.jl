@@ -738,9 +738,7 @@ function get_state!(state, fjp::FJacSplitPTC)
 end
 
 function get_state(fjp::FJacSplitPTC)
-    state = similar(fjp.modeljacode.solver_view_all.state)
-    get_state!(state, fjp)
-    return state
+    return  PB.get_data(fjp.modeljacode.solver_view_all.state)
 end
 
 
