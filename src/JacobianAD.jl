@@ -53,6 +53,7 @@ NB: there is a profusion of different Julia APIs here:
 - `request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD`:  chunk size for `ForwardDiff` automatic differentiation
 - `fill_jac_diagonal=true`: (`jac=:ForwardDiffSparse` only) true to fill diagonal of `jac_prototype`
 - `generated_dispatch=true`: `true` to autogenerate code for dispatch (fast dispatch, slow compile)
+- `throw_on_nan=false`: `true` to error if NaN detected in Jacobian
 - `use_base_vars=String[]`: additional Variable full names not calculated by Jacobian, which instead use arrays from `modeldata` base arrays (arrays_idx=1) instead of allocating new AD Variables
 """
 function jac_config_ode(
@@ -61,6 +62,7 @@ function jac_config_ode(
     request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     fill_jac_diagonal=true,
     generated_dispatch=true,
+    throw_on_nan=false,
     use_base_vars=String[],
 )
     @info "jac_config_ode: jac_ad=$jac_ad"
@@ -145,7 +147,8 @@ function jac_config_ode(
             modeldata, 
             jac_solverview, # use all Variables in model
             jac_dispatchlists, # use only Reactions specified
-            jac_cache,
+            jac_cache;
+            throw_on_nan,
         )
 
         return jac, jac_prototype
@@ -177,6 +180,7 @@ function jac_config_dae(
     jac_cellranges=modeldata.cellranges_all,
     implicit_cellranges=modeldata.cellranges_all,
     generated_dispatch=true,
+    throw_on_nan=false,
     use_base_vars=String[],
 )
     @info "jac_config_dae: jac_ad=$jac_ad"
@@ -315,7 +319,8 @@ function jac_config_dae(
                 modeldata, 
                 jac_solverview, 
                 jac_dispatchlists,
-                jac_cache,
+                jac_cache;
+                throw_on_nan,
             ),
             odeimplicit
         )

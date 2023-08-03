@@ -409,6 +409,10 @@ function solve_ptc(
     deltat = deltat_initial
     previous_state = copy(initial_state)
         
+    # record any initial state (eg state variables for short lived species)
+    initial_inner_state = get_state(ssFJ!) # so we can reset before writing output
+    inner_state = get_state(ssFJ!)
+
     ptc_iter = 1
     sol = nothing
     @time while tss < tss_max && ptc_iter <= max_iter
@@ -427,7 +431,7 @@ function solve_ptc(
         sol_ok = true
         try
             # solve nonlinear system for this pseudo-timestep
-            set_step!(ssFJ!, tss, deltat, previous_state)
+            set_step!(ssFJ!, tss, deltat, previous_state, inner_state)
             sol = NLsolve.nlsolve(nldf, previous_state; solvekwargs...)
             
             if verbose
@@ -470,9 +474,12 @@ function solve_ptc(
                 throw(e) # rethrow and fail
             end
         end
+       
+        if sol_ok
+            # record additional state (if any) from succesful step
+            get_state!(inner_state, ssFJ!)
 
-        # very crude pseudo-timestep adaptation (increase on success, reduce on failure)
-        if sol_ok          
+            # very crude pseudo-timestep adaptation (increase on success, reduce on failure)
             if deltat == deltat_full
                 # we used the full deltat and it worked - increase deltat
                 deltat *= deltat_fac
@@ -515,6 +522,8 @@ function solve_ptc(
 
     modelode = ssFJ!.modelode
     modeldata = modelode.modeldata
+    set_step!(ssFJ!, tss, 0.0, previous_state, initial_inner_state) # restore initial_inner_state
+    # NB: if using split dae with inner_state, this is updated in modeldata arrays as output is recalculated
     PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modelode, modeldata)
     return nothing    
 end
@@ -544,15 +553,23 @@ struct FJacPTC
 end
 
 """
-    set_step!(fjp::FJacPTC, t, deltat, previous_u)
+    set_step!(fjp::FJacPTC, t, deltat, previous_u, state::Nothing)
 
 Set time to step to `t`, `delta_t` of this step, and `previous_u` (value of state vector at previous time step `t - delta_t`).
 """
-function set_step!(fjp::FJacPTC, t, deltat, previous_u)
+function set_step!(fjp::FJacPTC, t, deltat, previous_u, state::Nothing)
     fjp.t[] = t
     fjp.delta_t[] = deltat
     fjp.previous_u .= previous_u
 
+    return nothing
+end
+
+# no additional internal state
+function get_state!(state::Nothing, fjp::FJacPTC)
+end
+
+function get_state(fjp::FJacPTC)
     return nothing
 end
 
@@ -693,17 +710,38 @@ function Base.getproperty(obj::FJacSplitPTC, sym::Symbol)
 end
 
 """
-    set_step!(fjp::FJacSplitPTC, t, deltat, previous_u)
+    set_step!(fjp::FJacSplitPTC, t, deltat, previous_u, state)
 
-Set time to step to `t`, `delta_t` of this step, and `previous_u` (value of state vector at previous time step `t - delta_t`).
+Set time to step to `t`, `delta_t` of this step, `previous_u` (value of outer state vector at previous time step `t - delta_t`),
+and inner state variables (corresponding to algebraic constraints) in modeldata arrays to `state`.
 """
-function set_step!(fjp::FJacSplitPTC, t, deltat, previous_u)
+function set_step!(fjp::FJacSplitPTC, t, deltat, previous_u, state)
     fjp.t[] = t
     fjp.delta_t[] = deltat
     fjp.previous_u .= previous_u
+    # set inner state Variables from last timestep
+    copyto!(fjp.modeljacode.solver_view_all.state, state)
 
     return nothing
 end
+
+"""
+    get_state!(state, fjp::FJacSplitPTC)
+    get_state(fjp::FJacSplitPTC) -> state
+
+Record values for inner state variables from modeldata arrays to `state`
+"""
+function get_state!(state, fjp::FJacSplitPTC)
+    # record inner state Variables from successful timestep
+    copyto!(state, fjp.modeljacode.solver_view_all.state)
+    return nothing
+end
+
+function get_state(fjp::FJacSplitPTC)
+    return  PB.get_data(fjp.modeljacode.solver_view_all.state)
+end
+
+
 
 # F only
 function (jn::FJacSplitPTC)(F::AbstractVector, u::AbstractVector)
@@ -754,7 +792,7 @@ function nlsolveF_SplitPTC(ms::SplitDAE.ModelSplitDAE, initial_state_outer, jaco
     deltat = Ref(NaN)
     previous_u = similar(initial_state_outer)
     du_worksp = similar(initial_state_outer)
- 
+
     # SplitDAE.ModelSplitDAE provides both ODE and Jacobian functions
     ssFJ! = FJacSplitPTC(ms, tss, deltat, previous_u, du_worksp)
 
