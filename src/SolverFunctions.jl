@@ -133,7 +133,8 @@ end
         modeldata; 
         solver_view=modeldata.solver_view_all,
         dispatchlists=modeldata.dispatchlists_all,
-        du_template, 
+        du_template,
+        throw_on_nan, 
         jac_cache,
     ) -> jac::JacODEForwardDiffSparse
 
@@ -147,17 +148,20 @@ Call as `jac(J, u, p, t)`
 mutable struct JacODEForwardDiffSparse{MD <: PB.ModelData, M, J <: SparseDiffTools.ForwardColorJacCache}
     modeldata::MD
     deriv_at_t::M
-    jac_cache::J    
+    jac_cache::J
+    throw_on_nan::Bool   
     njacs::Int    
 end
 
 function JacODEForwardDiffSparse(
-    modeldata::PB.ModelData, solver_view, dispatchlists, jac_cache::SparseDiffTools.ForwardColorJacCache
+    modeldata::PB.ModelData, solver_view, dispatchlists, jac_cache::SparseDiffTools.ForwardColorJacCache;
+    throw_on_nan = false,
 )
     return JacODEForwardDiffSparse(
         modeldata, 
         ModelODE_at_t(modeldata, solver_view=solver_view, dispatchlists=dispatchlists), 
         jac_cache, 
+        throw_on_nan,
         0,
     )
 end
@@ -178,7 +182,13 @@ function (jfds::JacODEForwardDiffSparse)(J, u, p, t)
     nnz_before == SparseArrays.nnz(J) || error("Jacobian sparsity changed nnz $(nnz_before) != $(SparseArrays.nnz(J))")
   
     countnan = count(isnan, J.nzval)
-    iszero(countnan) || @warn "JacODEForwardDiffSparse: Jacobian contains $countnan NaN at t=$t"
+    if !iszero(countnan)
+        if jfds.throw_on_nan
+            @error "JacODEForwardDiffSparse: Jacobian contains $countnan NaN at t=$t"
+        else
+            @warn "JacODEForwardDiffSparse: Jacobian contains $countnan NaN at t=$t"
+        end
+    end
 
     jfds.njacs += 1  
     

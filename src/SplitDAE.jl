@@ -165,6 +165,7 @@ function create_split_dae(
         jac_cellranges,
         fill_jac_diagonal=false,
         generated_dispatch,
+        throw_on_nan=true,
     )
     end # timeit
 
@@ -371,14 +372,23 @@ struct ModelSplitDAE{T, SVA, DLA, DLR, JF, VA1, VA2, VA3, CD, CJ, IK, LU}
     jacinner_ws::SparseArrays.SparseMatrixCSC{T, Int64}
 end
 
-# calculate ODE derivative for outer Variables, with inner Newton solve for algebraic constraints
+# Calculate ODE derivative for outer Variables, with inner Newton solve for algebraic constraints
+#
+# NB:
+# (1) the current (ie old) values of inner state variables from the modeldata arrays are used for initial calculation of derivative
+#     So if this calculates properties (eg radiation field) that are not recalculated during the inner Newton solve,
+#     and are affected by the values of the inner state variables (eg they affect the radiation field),
+#     the modeldata arrays for the inner state variables need to be set to a good approximation (eg the value from the previous time step)
+# (2) the current values of the inner state variables in the modeldata arrays are modified !! 
+#     So if this calculation is discarded (eg a failed time step), the inner state variables in the modeldata arrays needs to be reset.
+#
 function (ms::ModelSplitDAE)(du_outer::AbstractVector, u_outer::AbstractVector, p, t)
     
     # set outer state Variables
+    # NB: inner state Variables are *not* set, so current values in modeldata arrays will be used
     copyto!(ms.va_stateexplicit, u_outer)
-    # NB: inner state Variables are set below
-
-    # full derivative, with old values of inner state variables  
+   
+    # full derivative, with current values of inner state variables from modeldata arrays
     PALEOmodel.set_tforce!(ms.solver_view_all, t)
     PB.do_deriv(ms.dispatchlists_all)
 
