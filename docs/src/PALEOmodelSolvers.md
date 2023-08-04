@@ -117,7 +117,6 @@ CurrentModule = PALEOmodel
 A [`SolverView`](@ref) uses a collection of `PALEOboxes.VariableAggregator`s to assemble model state Variables and associated time derivatives into contiguous Vectors, for the convenience of standard numerical ODE / DAE solvers.  See [Mathematical formulation of the reaction-transport problem](@ref). 
 ```@docs
 SolverView
-SolverView
 set_default_solver_view!
 copy_norm!
 set_statevar!

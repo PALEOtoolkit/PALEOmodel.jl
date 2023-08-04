@@ -1,7 +1,12 @@
 """
     ReactionNetwork
 
-Functions to analyize a PALEOboxes.Model that contains a reaction network
+Functions to analyze a PALEOboxes.Model that contains a reaction network
+
+Compiles reaction stoichiometry and rate information from reaction-method-specific implementations of
+
+    PALEOboxes.get_rate_stoichiometry(m <: PALEOboxes.ReactionMethod) 
+
 """
 module ReactionNetwork
 
@@ -99,9 +104,9 @@ end
 """
     get_all_species_ratevars(model, domainname) -> OrderedDict(speciesname => [(stoich, ratevarname, processname), ...])
 
-Get all species and contributing reaction rate Variable names as Dict of Tuples (stoich, ratevarname) where
+Get all species and contributing reaction rate Variable names as Dict of Tuples (stoich, ratevarname, processname) where
 `ratevarname` is the name of an output Variable with a reaction rate, `stoich` is the stoichiometry of that rate
-applied to `species`.
+applied to `species`, and `processname` identifies the nature of the reaction.
 """
 function get_all_species_ratevars(
     model::PB.Model, domainname;
@@ -137,7 +142,7 @@ function get_all_species_ratevars(
 end
 
 """
-    get_rates(model, output, domainname [, outputrec] [, indices]) -> OrderedDict(ratevarname => rate)
+    get_rates(model, output, domainname; [outputrec], [indices]) -> OrderedDict(ratevarname => rate)
 
 Get all reaction rates for `domainname` from `output` record `outputrec` (defaults to last time record),
 for subset of cells in `indices` (defaults to whole domain).
@@ -161,7 +166,7 @@ function get_rates(
         rvs = PB.get_rate_stoichiometry(rj)
         if !isnothing(rvs)
             for (ratevarname, processname, stoich) in rvs   
-                rate = PB.get_data(output, domainname*"."*ratevarname, records=outputrec)
+                rate = PB.get_data(output, domainname*"."*ratevarname; records=outputrec)
                 rate_tot = sum(rate[indices])        
                 rate_totals[ratevarname] = rate_tot*scalefac
             end
@@ -172,8 +177,8 @@ function get_rates(
 end
 
 """
-    get_all_species_ratesummaries(model, output, domainname [, outputrec] [, indices]) 
-        -> OrderedDict(speciesname => (source, sink, net, source_rxs, sink_rxs))
+    get_all_species_ratesummaries(model, output, domainname; [, outputrec] [, indices], [, scalefac]) 
+        -> ratesummaries::OrderedDict(speciesname => (source, sink, net, source_rxs, sink_rxs))
 
 Get `source`, `sink`, `net` rates and rates of `source_rxs` and `sink_rxs` 
 for all species in `domainname` from `output` record `outputrec` (defaults to last record), 
@@ -240,24 +245,31 @@ function get_all_species_ratesummaries(
 end
 
 """
-    show_ratesummaries(ratesummaries [,select_species=[]])
+    show_ratesummaries([io::IO = stdout], ratesummaries [; select_species=[]])
 
-Print `ratesummaries` to terminal, optionally selecting species to print
+Print per-species reaction rates from `ratesummaries` to output stream `io` (defaults to `stdout`), 
+optionally selecting species to print.
+
+# Example
+
+    ratesummaries = PALEOmodel.ReactionNetwork.get_all_species_ratesummaries(model, output, "atm")
+    PALEOmodel.ReactionNetwork.show_ratesummaries(ratesummaries)
+
 """
-function show_ratesummaries(ratesummaries; select_species=[])
+function show_ratesummaries(io::IO, ratesummaries; select_species=[])
     for (species, rates) in ratesummaries
         if isempty(select_species) || species in select_species
-            Printf.@printf("\n")
-            Printf.@printf("%-8s                                                           net:   %g\n", species, rates.net)
-            Printf.@printf("\n")
-            Printf.@printf("%-8sProduction reactions                          rate         total: %g\n", species, rates.source)
+            Printf.@printf(io, "\n")
+            Printf.@printf(io, "%-8s                                                           net:   %g\n", species, rates.net)
+            Printf.@printf(io, "\n")
+            Printf.@printf(io, "%-8sProduction reactions                          rate         total: %g\n", species, rates.source)
             for (ratevarname, rxrate, equation, processname) in rates.source_rxs
-                Printf.@printf("        %-40s %16g            %-16s%s\n", equation, rxrate, "["*processname*"]", ratevarname)
+                Printf.@printf(io, "        %-40s %16g            %-16s%s\n", equation, rxrate, "["*processname*"]", ratevarname)
             end
-            Printf.@printf("\n")
-            Printf.@printf("%-8sLoss reactions                                rate         total: %g\n", species, rates.sink)
+            Printf.@printf(io, "\n")
+            Printf.@printf(io, "%-8sLoss reactions                                rate         total: %g\n", species, rates.sink)
             for (ratevarname, rxrate, equation, processname) in rates.sink_rxs
-                Printf.@printf("        %-40s %16g            %-16s%s\n", equation, rxrate, "["*processname*"]", ratevarname)
+                Printf.@printf(io, "        %-40s %16g            %-16s%s\n", equation, rxrate, "["*processname*"]", ratevarname)
             end
         end
     end
@@ -265,6 +277,7 @@ function show_ratesummaries(ratesummaries; select_species=[])
     return nothing
 end
 
+show_ratesummaries(ratesummaries; kwargs...) = show_ratesummaries(stdout; kwargs...)
 
 function __init__()
     # If PyCall is available, include additional functions using Python pydot.
