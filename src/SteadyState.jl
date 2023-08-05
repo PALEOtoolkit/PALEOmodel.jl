@@ -6,7 +6,7 @@ import PALEOmodel
 
 import LinearAlgebra
 import SparseArrays
-import Infiltrator
+# import Infiltrator
 
 import NLsolve
 import ..SolverFunctions
@@ -294,7 +294,7 @@ As [`steadystate_ptc`](@ref), with an inner Newton solve for per-cell algebraic 
 - `transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"]`: Variables not calculated by `operatorID_inner` that need to be copied for 
   inner solve (additional to those with `transfer_jacobian` set).
 - `inner_jac_ad::Symbol=:ForwardDiff`: form of automatic differentiation to use for Jacobian for inner `NonlinearNewton.solve` solver (options `:ForwardDiff`, `:ForwardDiffSparse`)
-- `inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60)`: keywords for inner 
+- `inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=x->x)`: keywords for inner 
   `NonlinearNewton.solve` solver.
 """
 function steadystate_ptc_splitdae(
@@ -312,11 +312,23 @@ function steadystate_ptc_splitdae(
     operatorID_inner=3,
     transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],
     inner_jac_ad=:ForwardDiff,
-    inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
+    inner_start_initial=false,
+    inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=x->x),
     BLAS_num_threads=1,
     generated_dispatch=true,
 )
     PB.check_modeldata(run.model, modeldata)
+
+    if :u_min in keys(inner_kwargs)
+        if ! (:project_region in keys(inner_kwargs))
+            @warn "steadystate_ptc_splitdae inner_kwargs.u_min is deprecated: replace with project_region=x->clamp.(x, u_min, Inf)"
+            u_min = inner_kwargs.u_min
+            inner_kwargs = NamedTuple(k=>v for (k, v) in pairs(inner_kwargs) if k != :u_min)
+            inner_kwargs = merge(inner_kwargs, (project_region = x->clamp.(x, u_min, Inf),))
+        else
+            error("steadystate_ptc_splitdae inner_kwargs defines both project_region and u_min: remove deprecated u_min")
+        end
+    end
 
     @timeit "create_split_dae" begin
     ms, initial_state_outer, jacouter_prototype = SplitDAE.create_split_dae(
@@ -326,7 +338,8 @@ function steadystate_ptc_splitdae(
         operatorID_inner,
         transfer_inner_vars,
         tss_jac_sparsity=tspan[1],
-        inner_jac_ad, 
+        inner_jac_ad,
+        inner_start_initial,
         inner_kwargs,
         generated_dispatch,
     )

@@ -1,6 +1,6 @@
 module NonLinearNewton
 
-import Infiltrator
+# import Infiltrator
 
 import LinearAlgebra
 
@@ -33,7 +33,7 @@ function solve(
     maxiters::Integer=100,
     verbose::Integer=0,
     jac_constant::Bool=false,
-    u_min=-Inf,
+    project_region = x->x,
 ) where {F, J}
 
     u = copy(u0)
@@ -41,7 +41,7 @@ function solve(
     Lnorm_2 = LinearAlgebra.norm(residual, 2)
     Lnorm_inf = LinearAlgebra.norm(residual, Inf)
     iters = 0
-    verbose >= 1 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf u $u residual $residual"
+    verbose >= 2 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf u $u residual $residual"
     
     if (Lnorm_inf > reltol || iters < miniters)
         jacobianfac = jac(u)
@@ -49,9 +49,7 @@ function solve(
             
             verbose >= 4 && @info "iters $iters jac:" jacobianfac
             u = u - jacobianfac \ residual
-            if u_min != -Inf
-                u = max.(u, u_min)
-            end
+            u = project_region(u)
             iters += 1
             residual = func(u)
             Lnorm_2 = LinearAlgebra.norm(residual, 2)
@@ -61,12 +59,12 @@ function solve(
                 jacobianfac = jac(u)
             end
             
-            verbose >= 2 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf"
-            verbose >= 3 && @info "    u $u residual $residual"
+            verbose >= 3 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf"
+            verbose >= 4 && @info "    u $u residual $residual"
         end
     end
 
-    verbose >= 1 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf u $u residual $residual"
+    verbose >= 2 && @info "iters $iters Lnorm_2 $Lnorm_2 Lnorm_inf $Lnorm_inf u $u residual $residual"
 
     iters < maxiters || throw(ErrorException("NonLinearNewton.solve: maxiters $maxiters reached"))
 
