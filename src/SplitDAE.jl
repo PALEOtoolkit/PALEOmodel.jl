@@ -9,7 +9,7 @@ import SparseArrays
 import StaticArrays
 import ForwardDiff
 import SparseDiffTools
-import Infiltrator
+# import Infiltrator
 using Logging
 import TimerOutputs: @timeit, @timeit_debug
 
@@ -29,7 +29,8 @@ import ..SparseUtils
         operatorID_inner=0,
         transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],  # additional Variables needed by 'inner' Reactions
         inner_jac_ad=:ForwardDiff: # form of automatic differentiation to use for Jacobian for inner solver (options `:ForwardDiff`, `:ForwardDiffSparse`)
-        inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
+        inner_start_initial=true, # true to use initial value of inner variables as start value, false to use last solution as initial value
+        inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=x->x),
         generated_dispatch=true,
     ) -> (ms::ModelSplitDAE, initial_state_outer, jac_outer_prototype)
 
@@ -61,7 +62,8 @@ function create_split_dae(
     operatorID_inner=0,
     transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],  # additional Variables needed by 'inner' Reactions
     inner_jac_ad=:ForwardDiff,
-    inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, u_min=1e-60),
+    inner_start_initial=true,
+    inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=x->x),
     generated_dispatch=true,
 )
 
@@ -212,14 +214,16 @@ function create_split_dae(
 
         @debug "cell $cidx dG_dcellinner dG_dcellinner_inv" dG_dcellinner dG_dcellinner_inv
 
-        # @Infiltrator.infiltrate
-        dcellinner_dcellouter = -dG_dcellinner_inv * dG_douter # n_inner x n_outer
+        # this is mathematically what is needed, but can lose the sparsity pattern:
+        # dcellinner_dcellouter = -dG_dcellinner_inv * dG_douter # n_inner x n_outer
+        dG_dcellinner_inv.nzval .= 1.0
+        dcellinner_dcellouter = dG_dcellinner_inv * dG_douter # keep +ve to preserve sparsity pattern
 
         # n_outer x n_outer  +=  n_outer x n_inner  * n_inner x n_outer
+        # NB: += will remove structural nonzeros that are zero (ie reduce sparsity pattern if any elements on rhs are zero)
+        # so to get correct sparsity, need to always multiply and add +ve numbers
         jacouter_implicit += jacfull_prototype[ijrange_outer, sci]*dcellinner_dcellouter
 
-        
-    
     end
 
     # combine to get full sparsity pattern
@@ -324,6 +328,7 @@ function create_split_dae(
         [c for c in cellconstraintsidxfull], # narrow_type
         [c for c in cellinitialstates], # narrow_type
         [c for c in celldGdoutercols], # narrow type
+        inner_start_initial,
         inner_kwargs,
         similar(initial_state_outer),
         similar(initial_state),
@@ -365,6 +370,7 @@ struct ModelSplitDAE{T, SVA, DLA, DLR, JF, VA1, VA2, VA3, CD, CJ, IK, LU}
     cellconstraintsidxfull::Vector{Vector{Int64}}
     cellinitialstates::Vector{Vector{Float64}}
     celldGdoutercols::Vector{Vector{Int64}}
+    inner_start_initial::Bool
     inner_kwargs::IK    
     outer_worksp::Vector{T}
     full_worksp::Vector{T}
@@ -396,20 +402,30 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, u_outer::AbstractVector, 
     copyto!(ms.va_stateexplicit_jaccell, u_outer)
 
     # Newton solution for inner state Variables for each cell
+    niter_inner_tot = 0
+    niter_inner_max = -1
     for (ci, cd, cj, cs) in PB.IteratorUtils.zipstrict(ms.cellindex, ms.cellderivs, ms.jaccells, ms.cellinitialstates)
-        # use current value (from previous iteration) as starting value
-        # copyto!(cd.worksp, cd.state)
-        # initial_state = StaticArrays.SVector{ncomps(cd)}(cd.worksp)
-        # always start from initial state
-        initial_state = StaticArrays.SVector{ncomps(cd)}(cs)
-        ms.inner_kwargs.verbose > 0 && @info "cell index: $ci initial_state: $initial_state"
+        
+        if ms.inner_start_initial
+            # always start from initial state
+            copyto!(cd.worksp, cs)
+        else
+            # use current value (from previous iteration) as starting value
+            copyto!(cd.worksp, cd.state)
+        end
+        initial_state = StaticArrays.SVector{ncomps(cd)}(cd.worksp)
+
+        ms.inner_kwargs.verbose > 1 && @info "cell index: $ci initial_state: $initial_state"
         (_, Lnorm_2_cell, Lnorm_inf_cell, niter) = NonLinearNewton.solve(
             cd,
             cj, 
             initial_state;
             ms.inner_kwargs...
         )
+        niter_inner_tot += niter
+        niter_inner_max = max(niter, niter_inner_max)
     end
+    ms.inner_kwargs.verbose > 0 && @info "      Inner iterations: max $niter_inner_max  mean $(niter_inner_tot/length(ms.cellindex))"
 
     # reevaluate full derivative with updated inner state variables
     # use dispatchlists_recalc_deriv if available (an optimization, eg don't need to rerun radiative transfer)
@@ -492,6 +508,7 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, J_outer::SparseArrays.Abs
                 SparseUtils.mult_sparse_vec!(tmpcol, (@view J_full[ijrange_outer, sci]), dcellinner_dcellouter)
                 # J_outer[:, j_outer] += tmpcol
                 SparseUtils.add_column_sparse_fixed!((@view J_outer[:, j_outer]), tmpcol)
+               
             end
         end
     end
@@ -517,7 +534,6 @@ ncomps(md::ModelDerivCell{Ncomps, T, VA1, VA2, D}) where {Ncomps, T, VA1, VA2, D
 
 # out-of-place SVector
 function (md::ModelDerivCell)(x::StaticArrays.SVector)
-    # @Infiltrator.infiltrate
     copyto!(md.state, x)
     PB.do_deriv(md.dispatchlists, 0.0)
     copyto!(md.worksp, md.deriv)
@@ -527,7 +543,6 @@ end
 
 # in place Vector
 function (md::ModelDerivCell)(y::AbstractVector, x::AbstractVector)
-    # @Infiltrator.infiltrate
     copyto!(md.state, x)
     PB.do_deriv(md.dispatchlists, 0.0)
     copyto!(y, md.deriv)
