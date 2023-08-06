@@ -29,8 +29,8 @@ import ..SparseUtils
         operatorID_inner=0,
         transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],  # additional Variables needed by 'inner' Reactions
         inner_jac_ad=:ForwardDiff: # form of automatic differentiation to use for Jacobian for inner solver (options `:ForwardDiff`, `:ForwardDiffSparse`)
-        inner_start_initial=true, # true to use initial value of inner variables as start value, false to use last solution as initial value
-        inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=x->x),
+        inner_start=:initial, # :initial to use initial value of inner variables as start value, :current to use last solution as initial value, :zero to use 0.0
+        inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=identity),
         generated_dispatch=true,
     ) -> (ms::ModelSplitDAE, initial_state_outer, jac_outer_prototype)
 
@@ -62,8 +62,8 @@ function create_split_dae(
     operatorID_inner=0,
     transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],  # additional Variables needed by 'inner' Reactions
     inner_jac_ad=:ForwardDiff,
-    inner_start_initial=true,
-    inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=x->x),
+    inner_start=:initial,
+    @nospecialize(inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=identity)),
     generated_dispatch=true,
 )
 
@@ -328,7 +328,7 @@ function create_split_dae(
         [c for c in cellconstraintsidxfull], # narrow_type
         [c for c in cellinitialstates], # narrow_type
         [c for c in celldGdoutercols], # narrow type
-        inner_start_initial,
+        inner_start,
         inner_kwargs,
         similar(initial_state_outer),
         similar(initial_state),
@@ -353,7 +353,7 @@ Provides functions for outer derivative and Jacobian:
     (ms::ModelSplitDAE)(du_outer::AbstractVector, J_outer::SparseArrays.AbstractSparseMatrixCSC, u_outer::AbstractVector, p, t)    
 
 """
-struct ModelSplitDAE{T, SVA, DLA, DLR, JF, VA1, VA2, VA3, CD, CJ, IK, LU}
+struct ModelSplitDAE{T, SVA, DLA, DLR, JF, VA1, VA2, VA3, CD, CJ, LU}
     modeldata::PB.ModelData
     solver_view_all::SVA
     dispatchlists_all::DLA
@@ -370,8 +370,8 @@ struct ModelSplitDAE{T, SVA, DLA, DLR, JF, VA1, VA2, VA3, CD, CJ, IK, LU}
     cellconstraintsidxfull::Vector{Vector{Int64}}
     cellinitialstates::Vector{Vector{Float64}}
     celldGdoutercols::Vector{Vector{Int64}}
-    inner_start_initial::Bool
-    inner_kwargs::IK    
+    inner_start::Symbol
+    inner_kwargs # no specialization to avoid recompilation
     outer_worksp::Vector{T}
     full_worksp::Vector{T}
     dG_dcellinner_lu::LU
@@ -390,6 +390,8 @@ end
 #
 function (ms::ModelSplitDAE)(du_outer::AbstractVector, u_outer::AbstractVector, p, t)
     
+    verbose = ms.inner_kwargs.verbose
+
     # set outer state Variables
     # NB: inner state Variables are *not* set, so current values in modeldata arrays will be used
     copyto!(ms.va_stateexplicit, u_outer)
@@ -406,16 +408,21 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, u_outer::AbstractVector, 
     niter_inner_max = -1
     for (ci, cd, cj, cs) in PB.IteratorUtils.zipstrict(ms.cellindex, ms.cellderivs, ms.jaccells, ms.cellinitialstates)
         
-        if ms.inner_start_initial
+        if ms.inner_start == :initial
             # always start from initial state
             copyto!(cd.worksp, cs)
-        else
+        elseif ms.inner_start == :current
             # use current value (from previous iteration) as starting value
             copyto!(cd.worksp, cd.state)
+        elseif ms.inner_start == :zero
+            # eg for linear problem
+            cd.worksp .= 0.0
+        else
+            error("ModelSplitDAE invalid inner_start = $inner_start")
         end
         initial_state = StaticArrays.SVector{ncomps(cd)}(cd.worksp)
 
-        ms.inner_kwargs.verbose > 1 && @info "cell index: $ci initial_state: $initial_state"
+        verbose > 1 && @info "cell index: $ci initial_state: $initial_state"
         (_, Lnorm_2_cell, Lnorm_inf_cell, niter) = NonLinearNewton.solve(
             cd,
             cj, 
@@ -425,7 +432,7 @@ function (ms::ModelSplitDAE)(du_outer::AbstractVector, u_outer::AbstractVector, 
         niter_inner_tot += niter
         niter_inner_max = max(niter, niter_inner_max)
     end
-    ms.inner_kwargs.verbose > 0 && @info "      Inner iterations: max $niter_inner_max  mean $(niter_inner_tot/length(ms.cellindex))"
+    verbose > 0 && @info "      Inner iterations: max $niter_inner_max  mean $(niter_inner_tot/length(ms.cellindex))"
 
     # reevaluate full derivative with updated inner state variables
     # use dispatchlists_recalc_deriv if available (an optimization, eg don't need to rerun radiative transfer)
@@ -558,7 +565,9 @@ end
 
 function (mjfd::ModelJacForwardDiffCell)(x::StaticArrays.SVector)
     # TODO ForwardDiff doesn't provide an API to get jacobian without setting Dual number 'tag'
-    return PALEOmodel.ForwardDiffWorkarounds.vector_mode_jacobian_notag(mjfd.modelderiv, x)
+    jac = PALEOmodel.ForwardDiffWorkarounds.vector_mode_jacobian_notag(mjfd.modelderiv, x)
+
+    return StaticArrays.lu(jac)
 end
 
 # calculate lu factorization of sparse Jacobian for a single cell

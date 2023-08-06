@@ -17,6 +17,34 @@ import SparseDiffTools
 # import Infiltrator # Julia debugger
 
 """
+    ca! = ClampAll!(minvalue, maxvalue)
+    ca!(v)
+
+Function object to clamp all values in Vector `v` to specified range using
+`clamp!(v, minvalue, maxvalue)` (in-place, mutating version)
+"""
+struct ClampAll!
+    minvalue::Float64
+    maxvalue::Float64
+end
+
+(ca::ClampAll!)(v) = clamp!(v, ca.minvalue, ca.maxvalue)
+
+"""
+    ca = ClampAll(minvalue, maxvalue)
+    ca(v) -> v
+
+Function object to clamp all values in Vector `v` to specified range using
+`clamp.(v, minvalue, maxvalue)` (out-of-place version)
+"""
+struct ClampAll
+    minvalue::Float64
+    maxvalue::Float64
+end
+
+(ca::ClampAll)(v) = clamp.(v, ca.minvalue, ca.maxvalue)
+
+"""
     ModelODE(
         modeldata; 
         solver_view=modeldata.solver_view_all,
