@@ -33,11 +33,11 @@ function solve(
     maxiters::Integer=100,
     verbose::Integer=0,
     jac_constant::Bool=false,
-    project_region = x->x,
+    project_region = identity,
 ) where {F, J}
 
     u = copy(u0)
-    residual = func(u0)
+    residual = func(u)
     Lnorm_2 = LinearAlgebra.norm(residual, 2)
     Lnorm_inf = LinearAlgebra.norm(residual, Inf)
     iters = 0

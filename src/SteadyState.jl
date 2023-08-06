@@ -50,7 +50,7 @@ function steadystate(
     run, initial_state, modeldata, tss; 
     outputwriter=run.output,
     initial_time=-1.0,
-    solvekwargs::NamedTuple=NamedTuple{}(),
+    @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
     jac_ad=:NoJacobian,
     use_norm::Bool=false,
     BLAS_num_threads=1,
@@ -188,7 +188,7 @@ function steadystate_ptc(
     deltat_fac=2.0,
     tss_output=Float64[],
     outputwriter=run.output,
-    solvekwargs::NamedTuple=NamedTuple{}(),
+    @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
     max_iter=1000,
     jac_ad=:NoJacobian,
     request_adchunksize=10,
@@ -294,7 +294,8 @@ As [`steadystate_ptc`](@ref), with an inner Newton solve for per-cell algebraic 
 - `transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"]`: Variables not calculated by `operatorID_inner` that need to be copied for 
   inner solve (additional to those with `transfer_jacobian` set).
 - `inner_jac_ad::Symbol=:ForwardDiff`: form of automatic differentiation to use for Jacobian for inner `NonlinearNewton.solve` solver (options `:ForwardDiff`, `:ForwardDiffSparse`)
-- `inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=x->x)`: keywords for inner 
+- `inner_start::Symbol=:current`: start value for inner solve (options `:initial`, `:current`, `:zero`)
+- `inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=identity)`: keywords for inner 
   `NonlinearNewton.solve` solver.
 """
 function steadystate_ptc_splitdae(
@@ -302,7 +303,7 @@ function steadystate_ptc_splitdae(
     deltat_fac=2.0,
     tss_output=Float64[],
     outputwriter=run.output,
-    solvekwargs::NamedTuple=NamedTuple{}(),
+    @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
     max_iter=1000,
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,
@@ -312,8 +313,8 @@ function steadystate_ptc_splitdae(
     operatorID_inner=3,
     transfer_inner_vars=["tmid", "volume", "ntotal", "Abox"],
     inner_jac_ad=:ForwardDiff,
-    inner_start_initial=false,
-    inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=x->x),
+    inner_start=:current,
+    @nospecialize(inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=identity)),
     BLAS_num_threads=1,
     generated_dispatch=true,
 )
@@ -341,7 +342,7 @@ function steadystate_ptc_splitdae(
         transfer_inner_vars,
         tss_jac_sparsity=tspan[1],
         inner_jac_ad,
-        inner_start_initial,
+        inner_start,
         inner_kwargs,
         generated_dispatch,
     )
@@ -376,7 +377,7 @@ function solve_ptc(
     tss_output=Float64[],
     max_iter=1000,
     outputwriter=run.output,
-    solvekwargs::NamedTuple=NamedTuple{}(),
+    @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
     enforce_noneg=false,
     verbose=false,
     BLAS_num_threads=1
@@ -557,8 +558,8 @@ from state `previous_u`:
 struct FJacPTC
     modelode #::M no specialization to minimise recompilation
     jacode #::J
-    t::Ref{Float64}
-    delta_t::Ref{Float64}
+    t::Base.RefValue{Float64}
+    delta_t::Base.RefValue{Float64}
     previous_u::Vector{Float64}
     du_worksp::Vector{Float64}
 end
@@ -706,8 +707,8 @@ from state `previous_u`:
 """
 struct FJacSplitPTC
     modeljacode # ::M # no specialization as this seems to cause compiler issues with Julia 1.7.3
-    t::Ref{Float64}
-    delta_t::Ref{Float64}
+    t::Base.RefValue{Float64}
+    delta_t::Base.RefValue{Float64}
     previous_u::Vector{Float64}
     du_worksp::Vector{Float64}
 end

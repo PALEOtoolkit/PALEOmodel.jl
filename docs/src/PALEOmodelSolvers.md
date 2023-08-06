@@ -50,6 +50,16 @@ steadystate_ptc
 steadystate_ptc_splitdae
 ```
 
+Function objects to project Newton steps into valid regions:
+
+```@meta
+CurrentModule = PALEOmodel.SolverFunctions
+```
+```@docs
+ClampAll!
+ClampAll
+```
+
 ## Steady-state solvers (Sundials Kinsol based):
 ```@meta
 CurrentModule = PALEOmodel.SteadyStateKinsol
