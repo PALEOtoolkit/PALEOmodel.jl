@@ -9,7 +9,7 @@ using .PyCall
 
 
 """
-    show_network_rate_nodes(model::PB.Model, domainname, output [, outputrec] [, indices] [.rate_thresh=0.0]) -> graph
+    show_network_rate_nodes(output, domainname, [, outputrec] [, indices] [.rate_thresh=0.0]) -> graph
 
 Display reaction network as a `pydot` `graph`, including nodes for reactions.
 
@@ -22,29 +22,21 @@ and the docstring for `pyimport_conda`. Assuming that a conda-based Python is be
 will download and install the Python package.
 """
 function show_network_rate_nodes(
-    model::PB.Model, domainname, output;
+    output, domainname;
     outputrec=length(output.domains[domainname]), 
-    indices=nothing,
+    indices=Colon(),
     rate_thresh=0.0,
     species_root_only=true
 )
 
-    rate_totals = get_rates(model, output, domainname;
-        outputrec=outputrec, 
-        indices=indices)
+    ratetable = get_rates(output, domainname; outputrec, indices)
 
-    rate_max = 0.0
-    for (rname, r) in rate_totals
-        rate_max = max(rate_max, r)
-    end
-
+    rate_max = maximum(ratetable.rate_total)
+  
     # species_ratevars = get_all_species_ratevars(model, domainname)
 
     ratesummaries = get_all_species_ratesummaries(
-        model, output, domainname,
-        outputrec=outputrec,
-        indices=indices,
-        species_root_only=species_root_only
+        output, domainname; outputrec, indices, species_root_only
     )
 
     pydot  = pyimport_conda("pydot", "pydot")
@@ -74,53 +66,41 @@ function show_network_rate_nodes(
             graph.add_edge(edge)
         end
     end
-
-
-    dom = PB.get_domain(model, domainname)
   
     colourlist = ["green", "black", "blue"]
     rate_idx = 1
-    for rj in dom.reactions
-        rvs = PB.get_rate_stoichiometry(rj)
-        if !isnothing(rvs)
-            
-           
-            for (ratevarname, processname, stoichvec) in rvs
-                if abs(rate_totals[ratevarname]) >= rate_thresh
-                    if processname == "photolysis"
-                        colour="red"
-                    else
-                        colour=colourlist[mod(rate_idx, length(colourlist))+1]                      
-                    end
+    for rv in eachrow(ratetable[abs.(ratetable.rate_total) .>= rate_thresh, :])
+        if processname == "photolysis"
+            colour="red"
+        else
+            colour=colourlist[mod(rate_idx, length(colourlist))+1]                      
+        end
 
-                    rate_norm = abs(rate_totals[ratevarname])/rate_max
-                    node = pydot.Node(ratevarname, shape="box", color=colour)
-                    graph.add_node(node)        
-                    for (speciesname, stoich) in stoichvec
-                        if species_root_only
-                            speciesname = get_species_root(speciesname)
-                        end
-                        if stoich*rate_totals[ratevarname] > 0
-                            from, to = ratevarname, speciesname
-                        else
-                            from, to = speciesname, ratevarname
-                        end
-                        if stoich != 0
-                            rate_stoich_norm = rate_norm * abs(stoich)
-                            edge = pydot.Edge(
-                                from, to,
-                                color=colour,
-                                weight=Int(floor(100*rate_stoich_norm))+1,
-                                penwidth=max(1.0, 20.0*rate_stoich_norm),
-                            )
-                            graph.add_edge(edge)
-                        end
-                    end
-                    rate_idx += 1
-                end
+        rate_norm = abs(rv.rate_total)/rate_max
+        node = pydot.Node(ratevarname, shape="box", color=colour)
+        graph.add_node(node)        
+        for (speciesname, stoich) in PB.IteratorUtils.zipstrict(rv.rate_species, rv.rate_stoichiometry)
+            if species_root_only
+                speciesname = get_species_root(speciesname)
+            end
+            if stoich*rv.rate_totals > 0
+                from, to = ratevarname, speciesname
+            else
+                from, to = speciesname, ratevarname
+            end
+            if stoich != 0
+                rate_stoich_norm = rate_norm * abs(stoich)
+                edge = pydot.Edge(
+                    from, to,
+                    color=colour,
+                    weight=Int(floor(100*rate_stoich_norm))+1,
+                    penwidth=max(1.0, 20.0*rate_stoich_norm),
+                )
+                graph.add_edge(edge)
             end
         end
-    end  
+        rate_idx += 1
+    end
 
     return graph
 end

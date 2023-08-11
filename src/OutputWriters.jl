@@ -1112,10 +1112,10 @@ function variable_is_constant(vname::AbstractString, vdata::Vector, attributes)
     is_constant = false
     # PALEO indicates time-independent variables by setting data_type attribute    
     if get(attributes, :datatype, nothing) == Float64
-        data_identical = true
+        data_identical = false
         for v in vdata
-            if v != first(vdata)
-                data_identical = false
+            if v == first(vdata) || (all(isnan, v) && all(isnan, first(vdata)))
+                data_identical = true
             end
         end
         if data_identical
@@ -1510,7 +1510,7 @@ function name_to_netcdf(vname, attributes)
 
     vnamenetcdf = replace(vname, "/"=>"%")
     if vnamenetcdf != vname
-        @info "  replaced / with % in variable name $vname -> $vnamenetcdf" 
+        @debug "  replaced / with % in variable name $vname -> $vnamenetcdf" 
     end
 
     return vnamenetcdf
@@ -1519,7 +1519,7 @@ end
 function netcdf_to_name(vnamenetcdf, attributes)
     vname = get(attributes, :var_name, vnamenetcdf)
     if vname != vnamenetcdf
-        @info "  replaced % with / in variable name $vnamenetcdf -> $vname" 
+        @debug "  replaced % with / in variable name $vnamenetcdf -> $vname" 
     end
 
     return vname
@@ -1533,7 +1533,7 @@ function attributes_to_netcdf!(v, attributes)
         if aname == :data_dims
             aval = String[v for v in aval] # Tuple to vector
         else
-            if (typeof(aval) in (Float64, Vector{Float64}, Vector{Int64})) #  Bool))
+            if (typeof(aval) in (Float64, Int64, String, Vector{Float64}, Vector{Int64}, Vector{String})) #  Bool))
                 # supported netCDF type, no conversion
             else
                 # anything else - convert to string
@@ -1557,7 +1557,9 @@ function netcdf_to_attributes(v)
         :operatorID => v->isa(v, Vector) ? v : [v], # stored as a vector but returned as a scalar if length 1
         :vfunction => v->parse(PB.VariableFunction, v),
         :vphase => v->parse(PB.VariablePhase, v),
-        :datatype => v->isdefined(Base, Symbol(v)) ? getfield(Base, Symbol(v)) : v  # look for a type eg Float64, fallback to String if not found
+        :datatype => v->isdefined(Base, Symbol(v)) ? getfield(Base, Symbol(v)) : v,  # look for a type eg Float64, fallback to String if not found
+        :rate_species => v->isa(v, Vector) ? v : [v], # stored as a vector but returned as a scalar if length 1
+        :rate_stoichiometry => v->isa(v, Vector) ? v : [v], # stored as a vector but returned as a scalar if length 1
     )
     # convert string value for other attributes (currently just bools)
     attrib_val_to_typed = Dict(
