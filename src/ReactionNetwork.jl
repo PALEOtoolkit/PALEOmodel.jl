@@ -1,11 +1,13 @@
 """
     ReactionNetwork
 
-Functions to analyze a PALEOboxes.Model that contains a reaction network
+Functions to analyze a PALEOboxes.Model or PALEOmodel output that contains a reaction network
 
-Compiles reaction stoichiometry and rate information from reaction-method-specific implementations of
+Compiles reaction stoichiometry and rate information from attributes attached to reaction rate variables:
 
-    PALEOboxes.get_rate_stoichiometry(m <: PALEOboxes.ReactionMethod) 
+- rate_processname::String: a process name (eg "photolysis", "reaction", ...)
+- rate_species::Vector{String} names of reactant and product species
+- rate_stoichiometry::Vector{Float64} stoichiometry of reactant and product species
 
 """
 module ReactionNetwork
@@ -14,36 +16,33 @@ import Printf
 import Requires
 import PALEOboxes as PB
 import PALEOmodel
-
+import DataFrames
 
 """
-    get_equations(model, domainname) -> OrderedDict(ratevarname => reactioneqn)
+    add_equations!(ratetable)
 
-Get all rate variables and a string with a user-friendly chemical equation for `domainname` in `model`
+Add a column `equation` with user-friendly chemical equation to `ratetable`
 """
-function get_equations(
-    model::PB.Model, domainname;
+function add_equations!(
+    ratetable;
     species_root_only=true
 )
-    
-    dom = PB.get_domain(model, domainname)
-
-    equations = Dict{String, Any}()
-    for rj in dom.reactions
-        rvs = PB.get_rate_stoichiometry(rj)
-        if !isnothing(rvs)
-            for (ratevarname, processname, stoich) in rvs   
-                equations[ratevarname] = stoich_to_equation(
-                    stoich, 
-                    sourcename=ratevarname,
-                    sinkname=ratevarname,
-                    species_root_only=species_root_only
+    equation = String[]
+    for rv in eachrow(ratetable)
+        push!(
+            equation,
+            stoich_to_equation(
+                    Dict(PB.IteratorUtils.zipstrict(rv.rate_species, rv.rate_stoichiometry)), 
+                    sourcename=rv.name,
+                    sinkname=rv.name,
+                    species_root_only=species_root_only,
                 )
-            end
-        end
+        )
     end
-    
-    return sort(equations)
+
+    ratetable.equation = equation
+
+    return nothing
 end
 
 "return species only from string of form  species::isotope eg CH4::CIsotope"
@@ -101,34 +100,76 @@ function reverse_equation(eqn)
     return rhs*" -> "*lhs
 end
 
+
+
+
+"""
+    get_ratetable(model, domainname) -> DataFrame
+    get_ratetable(output, domainname) -> DataFrame
+
+Get table of rate Variables and reactions
+
+Returns a DataFrame with columns `:name`, `:rate_processname`, `:rate_species`, `:rate_stoichiometry`
+"""
+function get_ratetable(output::PALEOmodel.AbstractOutputWriter, domainname; add_equations=true, species_root_only=true)
+    ratetable = PB.show_variables(
+        output, domainname; 
+        filter=d->(:rate_processname in keys(d)), attributes=[:rate_processname, :rate_species, :rate_stoichiometry]
+    )
+
+    if add_equations
+        add_equations!(ratetable; species_root_only)
+    end
+
+    sort!(ratetable, [:name])
+
+    return ratetable
+end
+
+function get_ratetable(model::PB.Model, domainname; add_equations=true, species_root_only=true)
+
+    domain = PB.get_domain(model, domainname)
+
+    ratevars = PB.get_variables(domain, v->PB.has_attribute(v, :rate_processname))
+
+    ratetable = DataFrames.DataFrame(
+        name = [rv.name for rv in ratevars],
+        rate_processname = [PB.get_attribute(rv, :rate_processname) for rv in ratevars],
+        rate_species = [PB.get_attribute(rv, :rate_species) for rv in ratevars],
+        rate_stoichiometry = [PB.get_attribute(rv, :rate_stoichiometry) for rv in ratevars],
+    )
+
+    if add_equations
+        add_equations!(ratetable; species_root_only)
+    end
+
+    sort!(ratetable, [:name])
+
+    return ratetable
+end
+
 """
     get_all_species_ratevars(model, domainname) -> OrderedDict(speciesname => [(stoich, ratevarname, processname), ...])
+    get_all_species_ratevars(output, domainname) -> OrderedDict(speciesname => [(stoich, ratevarname, processname), ...])
+    get_all_species_ratevars(ratetable::DataFrame) -> OrderedDict(speciesname => [(stoich, ratevarname, processname), ...])
 
 Get all species and contributing reaction rate Variable names as Dict of Tuples (stoich, ratevarname, processname) where
 `ratevarname` is the name of an output Variable with a reaction rate, `stoich` is the stoichiometry of that rate
 applied to `species`, and `processname` identifies the nature of the reaction.
 """
 function get_all_species_ratevars(
-    model::PB.Model, domainname;
+    ratetable;
     species_root_only=true
 )
-
     species_rates = Dict{String, Vector{Tuple{Float64,String, String}}}()
 
-    dom = PB.get_domain(model, domainname)
-
-    for rj in dom.reactions
-        rvs = PB.get_rate_stoichiometry(rj)
-        if !isnothing(rvs)
-            for (ratevarname, processname, stoich) in rvs           
-                for (speciesname, s) in stoich
-                    if species_root_only
-                        speciesname = get_species_root(speciesname)
-                    end
-                    sr = get!(species_rates, speciesname, [])
-                    push!(sr, (s, ratevarname, processname))
-                end
+    for rv in eachrow(ratetable)      
+        for (speciesname, s) in PB.IteratorUtils.zipstrict(rv.rate_species, rv.rate_stoichiometry)
+            if species_root_only
+                speciesname = get_species_root(speciesname)
             end
+            sr = get!(species_rates, speciesname, [])
+            push!(sr, (s, rv.name, rv.rate_processname))
         end
     end
 
@@ -141,83 +182,80 @@ function get_all_species_ratevars(
     return sort(species_rates)
 end
 
-"""
-    get_rates(model, output, domainname; [outputrec], [indices]) -> OrderedDict(ratevarname => rate)
+function get_all_species_ratevars(output::PALEOmodel.AbstractOutputWriter, domainname; kwargs...)
+    ratetable = get_ratetable(output, domainname; add_equations=false)
+    return get_all_species_ratevars(ratetable; kwargs...)
+end
 
-Get all reaction rates for `domainname` from `output` record `outputrec` (defaults to last time record),
-for subset of cells in `indices` (defaults to whole domain).
-"""
-function get_rates(
-    model::PB.Model, output, domainname;
-    outputrec=length(output.domains[domainname]), 
-    indices=nothing,
-    scalefac=1.0
-)
-    
-    dom = PB.get_domain(model, domainname)
-
-    if isnothing(indices)
-        cellrange = PB.Grids.create_default_cellrange(dom, dom.grid)
-        indices = cellrange.indices
-    end
-
-    rate_totals = Dict()
-    for rj in dom.reactions
-        rvs = PB.get_rate_stoichiometry(rj)
-        if !isnothing(rvs)
-            for (ratevarname, processname, stoich) in rvs   
-                rate = PB.get_data(output, domainname*"."*ratevarname; records=outputrec)
-                rate_tot = sum(rate[indices])        
-                rate_totals[ratevarname] = rate_tot*scalefac
-            end
-        end
-    end
-    
-    return sort(rate_totals)
+function get_all_species_ratevars(model::PB.Model, domainname; kwargs...)
+    ratetable = get_ratetable(model, domainname; add_equations=false)
+    return get_all_species_ratevars(ratetable; kwargs...)
 end
 
 """
-    get_all_species_ratesummaries(model, output, domainname; [, outputrec] [, indices], [, scalefac]) 
-        -> ratesummaries::OrderedDict(speciesname => (source, sink, net, source_rxs, sink_rxs))
+    get_rates(output, domainname [, outputrec] [, indices] [, scalefac] [, add_equations] [, ratetable_source]) -> DataFrame
+
+Get all reaction rates as column `rate_total` for `domainname` from `output` record `outputrec` (defaults to last time record),
+for subset of cells in `indices` (defaults to whole domain).
+
+Set optional `ratetable_source = model` to use with older output that doesn't include rate variable attributes.
+"""
+function get_rates(
+    output::PALEOmodel.AbstractOutputWriter, domainname;
+    outputrec=length(output.domains[domainname]), 
+    indices=Colon(),
+    scalefac=1.0,
+    add_equations=true,
+    species_root_only=true,
+    ratetable_source=output,
+)
+
+    ratetable = get_ratetable(ratetable_source, domainname; add_equations, species_root_only)
+
+    rate_total = Float64[]
+    for rv in eachrow(ratetable)
+        rate = PB.get_data(output, domainname*"."*rv.name; records=outputrec)
+        rate_tot = sum(rate[indices])        
+        push!(rate_total, rate_tot*scalefac)
+    end
+       
+    ratetable.rate_total = rate_total
+
+    return ratetable
+end
+
+"""
+    get_all_species_ratesummaries(output, domainname [, outputrec] [, indices] [, scalefac] [, ratetable_source]) 
+        -> OrderedDict(speciesname => (source, sink, net, source_rxs, sink_rxs))
 
 Get `source`, `sink`, `net` rates and rates of `source_rxs` and `sink_rxs` 
 for all species in `domainname` from `output` record `outputrec` (defaults to last record), 
 cells in `indices` (defaults to whole domain),
 
 Optional `scalefac` to convert units, eg `scalefac`=1.90834e12 to convert mol m-2 yr-1 to molecule cm-2 s-1
+
+Set optional `ratetable_source = model` to use with older output that doesn't include rate variable attributes.
 """
 function get_all_species_ratesummaries(
-    model::PB.Model, output, domainname;
+    output, domainname;
     outputrec=length(output.domains[domainname]), 
-    indices=nothing,
+    indices=Colon(),
     scalefac=1.0,
-    species_root_only=true
+    species_root_only=true,
+    ratetable_source=output,
 )
 
-    rate_totals = get_rates(
-        model, output, domainname,
-        outputrec=outputrec, 
-        indices=indices,
-        scalefac=scalefac
-    )
+    ratetable = get_rates(output, domainname; outputrec, indices, scalefac, add_equations=true, species_root_only, ratetable_source)
 
-    equations = get_equations(
-        model, domainname,
-        species_root_only=species_root_only
-    )
-
-    species_ratevars = get_all_species_ratevars(
-        model, domainname,
-        species_root_only=species_root_only
-    )
+    species_ratevars = get_all_species_ratevars(ratetable; species_root_only)
 
     rate_summaries = Dict()
     for (species, ratevars) in species_ratevars
         source, sink = 0.0, 0.0
         source_rxs, sink_rxs = [], []
         for (stoich, ratevarname, processname) in ratevars
-            rate = rate_totals[ratevarname]
-            eqn = equations[ratevarname]
+            rate = ratetable[ratetable.name .== ratevarname, :rate_total][]
+            eqn = ratetable[ratetable.name .== ratevarname, :equation][]
             if rate < 0
                 stoich = -stoich
                 rate = -rate
