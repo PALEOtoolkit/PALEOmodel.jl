@@ -1,11 +1,13 @@
 """
     ReactionNetwork
 
-Functions to analyze a PALEOboxes.Model that contains a reaction network
+Functions to analyze a PALEOboxes.Model or PALEOmodel output that contains a reaction network
 
-Compiles reaction stoichiometry and rate information from reaction-method-specific implementations of
+Compiles reaction stoichiometry and rate information from attributes attached to reaction rate variables:
 
-    PALEOboxes.get_rate_stoichiometry(m <: PALEOboxes.ReactionMethod) 
+- rate_processname::String: a process name (eg "photolysis", "reaction", ...)
+- rate_species::Vector{String} names of reactant and product species
+- rate_stoichiometry::Vector{Float64} stoichiometry of reactant and product species
 
 """
 module ReactionNetwork
@@ -180,7 +182,6 @@ function get_all_species_ratevars(
     return sort(species_rates)
 end
 
-<<<<<<< HEAD
 function get_all_species_ratevars(output::PALEOmodel.AbstractOutputWriter, domainname; kwargs...)
     ratetable = get_ratetable(output, domainname; add_equations=false)
     return get_all_species_ratevars(ratetable; kwargs...)
@@ -192,10 +193,12 @@ function get_all_species_ratevars(model::PB.Model, domainname; kwargs...)
 end
 
 """
-    get_rates(output, domainname [, outputrec] [, indices]) -> DataFrame
+    get_rates(output, domainname [, outputrec] [, indices] [, scalefac] [, add_equations] [, ratetable_source]) -> DataFrame
 
 Get all reaction rates as column `rate_total` for `domainname` from `output` record `outputrec` (defaults to last time record),
 for subset of cells in `indices` (defaults to whole domain).
+
+Set optional `ratetable_source = model` to use with older output that doesn't include rate variable attributes.
 """
 function get_rates(
     output::PALEOmodel.AbstractOutputWriter, domainname;
@@ -204,9 +207,10 @@ function get_rates(
     scalefac=1.0,
     add_equations=true,
     species_root_only=true,
+    ratetable_source=output,
 )
 
-    ratetable = get_ratetable(output, domainname; add_equations, species_root_only)
+    ratetable = get_ratetable(ratetable_source, domainname; add_equations, species_root_only)
 
     rate_total = Float64[]
     for rv in eachrow(ratetable)
@@ -221,64 +225,27 @@ function get_rates(
 end
 
 """
-    get_all_species_ratesummaries(output, domainname [, outputrec] [, indices]) 
+    get_all_species_ratesummaries(output, domainname [, outputrec] [, indices] [, scalefac] [, ratetable_source]) 
         -> OrderedDict(speciesname => (source, sink, net, source_rxs, sink_rxs))
-=======
-"""
-    get_rates(model, output, domainname; [outputrec], [indices]) -> OrderedDict(ratevarname => rate)
-
-Get all reaction rates for `domainname` from `output` record `outputrec` (defaults to last time record),
-for subset of cells in `indices` (defaults to whole domain).
-"""
-function get_rates(
-    model::PB.Model, output, domainname;
-    outputrec=length(output.domains[domainname]), 
-    indices=nothing,
-    scalefac=1.0
-)
-    
-    dom = PB.get_domain(model, domainname)
-
-    if isnothing(indices)
-        cellrange = PB.Grids.create_default_cellrange(dom, dom.grid)
-        indices = cellrange.indices
-    end
-
-    rate_totals = Dict()
-    for rj in dom.reactions
-        rvs = PB.get_rate_stoichiometry(rj)
-        if !isnothing(rvs)
-            for (ratevarname, processname, stoich) in rvs   
-                rate = PB.get_data(output, domainname*"."*ratevarname; records=outputrec)
-                rate_tot = sum(rate[indices])        
-                rate_totals[ratevarname] = rate_tot*scalefac
-            end
-        end
-    end
-    
-    return sort(rate_totals)
-end
-
-"""
-    get_all_species_ratesummaries(model, output, domainname; [, outputrec] [, indices], [, scalefac]) 
-        -> ratesummaries::OrderedDict(speciesname => (source, sink, net, source_rxs, sink_rxs))
->>>>>>> main
 
 Get `source`, `sink`, `net` rates and rates of `source_rxs` and `sink_rxs` 
 for all species in `domainname` from `output` record `outputrec` (defaults to last record), 
 cells in `indices` (defaults to whole domain),
 
 Optional `scalefac` to convert units, eg `scalefac`=1.90834e12 to convert mol m-2 yr-1 to molecule cm-2 s-1
+
+Set optional `ratetable_source = model` to use with older output that doesn't include rate variable attributes.
 """
 function get_all_species_ratesummaries(
     output, domainname;
     outputrec=length(output.domains[domainname]), 
     indices=Colon(),
     scalefac=1.0,
-    species_root_only=true
+    species_root_only=true,
+    ratetable_source=output,
 )
 
-    ratetable = get_rates(output, domainname; outputrec, indices, scalefac, add_equations=true, species_root_only)
+    ratetable = get_rates(output, domainname; outputrec, indices, scalefac, add_equations=true, species_root_only, ratetable_source)
 
     species_ratevars = get_all_species_ratevars(ratetable; species_root_only)
 

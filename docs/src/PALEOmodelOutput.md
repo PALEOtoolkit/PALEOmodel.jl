@@ -119,7 +119,9 @@ ReactionNetwork
 CurrentModule = PALEOmodel.ReactionNetwork
 ```
 ```@docs
+get_ratetable
 get_all_species_ratevars
+get_rates
 get_all_species_ratesummaries
 show_ratesummaries
 ```
