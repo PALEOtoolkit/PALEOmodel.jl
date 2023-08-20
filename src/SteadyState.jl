@@ -171,6 +171,7 @@ to the rate of convergence, so requires some trial-and-error to set an appropiat
 - `outputwriter=run.output`: output destination
 - `solvekwargs=NamedTuple()`: arguments to pass through to NLsolve
 - `max_iter=1000`: maximum number of PTC iterations
+- `max_failed_iter=20`: maximum number of iterations that make no progress before exiting
 - `jac_ad=:NoJacobian`: AD Jacobian to use
 - `request_adchunksize=10`: ForwardDiff chunk size to request.
 - `jac_cellranges=modeldata.cellranges_all`: CellRanges to use for Jacobian calculation
@@ -190,6 +191,7 @@ function steadystate_ptc(
     outputwriter=run.output,
     @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
     max_iter=1000,
+    max_failed_iter=20,
     jac_ad=:NoJacobian,
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,
@@ -219,6 +221,7 @@ function steadystate_ptc(
         run, initial_state, nlsolveF, tspan, deltat_initial::Float64;
         deltat_fac,
         max_iter,
+        max_failed_iter,
         tss_output,
         outputwriter,
         solvekwargs,
@@ -284,6 +287,7 @@ As [`steadystate_ptc`](@ref), with an inner Newton solve for per-cell algebraic 
 - `outputwriter`
 - `solvekwargs`
 - `max_iter`
+- `max_failed_iter`
 - `request_adchunksize`
 - `jac_cellranges`
 - `enforce_noneg`
@@ -305,6 +309,7 @@ function steadystate_ptc_splitdae(
     outputwriter=run.output,
     @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
     max_iter=1000,
+    max_failed_iter=20,
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,
     enforce_noneg=false,
@@ -354,6 +359,7 @@ function steadystate_ptc_splitdae(
         run, initial_state_outer, nlsolveF, tspan, deltat_initial;
         deltat_fac,
         max_iter,
+        max_failed_iter,
         tss_output,
         outputwriter,
         solvekwargs,
@@ -376,6 +382,7 @@ function solve_ptc(
     deltat_fac=2.0,
     tss_output=Float64[],
     max_iter=1000,
+    max_failed_iter,
     outputwriter=run.output,
     @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
     enforce_noneg=false,
@@ -428,8 +435,9 @@ function solve_ptc(
     inner_state = get_state(ssFJ!)
 
     ptc_iter = 1
+    failed_iter = 0
     sol = nothing
-    @time while tss < tss_max && ptc_iter <= max_iter
+    @time while tss < tss_max && ptc_iter <= max_iter && failed_iter <= max_failed_iter
         deltat_full = deltat  # keep track of the deltat we could have used
         deltat = min(deltat, tss_max - tss) # limit last timestep to get to tss_max
         if iout <= length(tss_output_filtered)
@@ -439,10 +447,11 @@ function solve_ptc(
         tss += deltat
 
         verbose && @info lpad("", 80, "=")
-        @info "steadystate_ptc: ptc_iter $ptc_iter tss $(tss) deltat=$(deltat) deltat_full=$deltat_full calling nlsolve..."
+        @info "steadystate_ptc: ptc_iter $ptc_iter tss $(tss) deltat=$(deltat) deltat_full=$deltat_full failed_iter=$failed_iter calling nlsolve..."
         verbose && @info lpad("", 80, "=")
         
         sol_ok = true
+        sol_progress = true
         try
             # solve nonlinear system for this pseudo-timestep
             set_step!(ssFJ!, tss, deltat, previous_state, inner_state)
@@ -469,6 +478,7 @@ function solve_ptc(
             end
 
             sol_ok = sol.f_converged
+            sol_progress = sol.f_converged && (sol.iterations > 0)
             
             if sol.f_converged && enforce_noneg
                 sol_hasneg = any(x -> x < 0.0, sol.zero)
@@ -481,9 +491,11 @@ function solve_ptc(
             if isa(e, LinearAlgebra.SingularException)
                 @warn "LinearAlgebra.SingularException"
                 sol_ok = false # will force timestep reduction and retry
+                sol_progress = false
             elseif isa(e, ErrorException)
                 @warn "ErrorException: $(e.msg)"
                 sol_ok = false # will force timestep reduction and retry
+                sol_progress = false
             else
                 throw(e) # rethrow and fail
             end
@@ -520,11 +532,18 @@ function solve_ptc(
             tss -=  deltat
             deltat /= deltat_fac^2
         end
+
+        if sol_progress
+            failed_iter = 0
+        else
+            failed_iter += 1
+        end
         
         ptc_iter += 1
     end
 
     ptc_iter <= max_iter || @warn("     max iterations $max_iter exceeded")
+    failed_iter <= max_failed_iter || @warn("     max failed iterations $max_failed_iter exceeded")
     # always write the last record even if it wasn't explicitly requested
     if tsoln[end] != tss
         @info "    writing output record at tmodel = $(tss)"
