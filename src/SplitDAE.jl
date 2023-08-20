@@ -181,7 +181,7 @@ function create_split_dae(
     jacouter_prototype = jacfull_prototype[ijrange_outer, ijrange_outer]
 
     # include contributions from inner state Variables    
-    jacouter_implicit = SparseArrays.spzeros(size(jacouter_prototype))
+    jacouter_implicit = SparseArrays.spzeros(size(jacouter_prototype)...) # Julia 1.6 requires ... here
     dG_dcellinner_lu = nothing
     jacinner_prototype = nothing
    
