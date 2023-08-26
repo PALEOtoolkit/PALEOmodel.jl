@@ -786,7 +786,7 @@ end
 
 
 """
-    save_netcdf(output::OutputMemory, filename)
+    save_netcdf(output::OutputMemory, filename; kwargs...)
 
 Save to `filename` in netcdf4 format (NB: filename must either have no extension or have extension `.nc`)
 
@@ -795,8 +795,19 @@ Save to `filename` in netcdf4 format (NB: filename must either have no extension
 - Isotope-valued variables (`field_data = PB.IsotopeLinear`) are written with an extra `isotopelinear` netCDF dimension, containing the variable `total` and `delta`.
 - Any '/' characters in PALEO variables are substited for '%' in the netcdf name.
 
+# Keyword arguments
+- `check_ext::Bool = true`: check that filename ends in ".nc"
+- `add_coordinates::Bool = false`: true to attempt to add CF convention coords to variables (experimental, doesn't look that useful)
+- `define_all_first::Bool = true` : true to make two passes through each Domain, first to define variables and then to add data
+  (optimisation, speeds up writes at cost of more memory)
 """
-function save_netcdf(output::OutputMemory, filename; check_ext=true, add_coordinates=false)
+function save_netcdf(
+    output::OutputMemory, filename;
+    additional_attributes::AbstractVector{<:Pair{<:AbstractString, <:Any}} = Pair{String, String}[],
+    check_ext::Bool=true,
+    add_coordinates::Bool=false,
+    define_all_first::Bool=true,
+)
 
     if check_ext
         filename = _check_filename_ext(filename, ".nc")
@@ -839,6 +850,7 @@ function save_netcdf(output::OutputMemory, filename; check_ext=true, add_coordin
 
             colnames = sort(names(dom.data))
             added_isotopelinear_dims = false
+            nc_all_vdata = []
             for vname in colnames
                 haskey(dom.metadata, vname) || error("no metadata for Variable $(dom.name).$vname")
 
@@ -858,7 +870,7 @@ function save_netcdf(output::OutputMemory, filename; check_ext=true, add_coordin
                 vdata = dom.data[1:dom._nrecs, vname] 
                 @debug "writing Variable $(dom.name).$vname dframe eltype $(eltype(vdata)) space $space"
 
-                variable_to_netcdf!(
+                nc_v, nc_vdata = variable_to_netcdf!(
                     dsg,
                     coords_record,
                     vname, 
@@ -871,8 +883,18 @@ function save_netcdf(output::OutputMemory, filename; check_ext=true, add_coordin
                     dom.grid, 
                     attributes;
                     add_coordinates,
+                    define_only=define_all_first,  # just define the variable, don't write the data
                 )
                 
+                if define_all_first
+                    # keep netcdf variable and modified data to write in separate loop
+                    push!(nc_all_vdata, (nc_v, nc_vdata))
+                end
+            end
+
+            # write data (only used if define_all_first==true)
+            for (nc_v, nc_vdata) in nc_all_vdata
+                nc_v[:] = nc_vdata
             end
         end
     end
@@ -915,7 +937,10 @@ function load_netcdf!(output::OutputMemory, filename; check_ext=true)
             data = DataFrames.DataFrame()
             metadata = Dict{String, Dict{Symbol, Any}}()
 
-            grid, spatial_packfn = netcdf_to_grid(dsg)
+            # reading out variables is slow, so do this once
+            dsgvars = Dict(varname=>var for (varname, var) in dsg)
+
+            grid, spatial_packfn = netcdf_to_grid(dsg, dsgvars)
 
             data_dim_names = ncattrib_as_vector(dsg, "data_dims")
             data_dim_sizes = [dsg.dim[ddn] for ddn in data_dim_names]
@@ -923,7 +948,7 @@ function load_netcdf!(output::OutputMemory, filename; check_ext=true)
             for (ddn, dds) in zip(data_dim_names, data_dim_sizes)
                 dd_coords = PB.FixedCoord[]
                 for dd_coord_name in ncattrib_as_vector(dsg, ddn*"_coords")
-                    var = dsg[dd_coord_name]
+                    var = dsgvars[dd_coord_name]
                     attributes = netcdf_to_attributes(var)
                     !(coords_record in NCDatasets.dimnames(var)) || error("data_dim coord variable $dd_coord_name is not constant! (has a $coords_record dimension)")
                     push!(dd_coords, PB.FixedCoord(dd_coord_name, var[:], attributes))
@@ -931,15 +956,14 @@ function load_netcdf!(output::OutputMemory, filename; check_ext=true)
                 push!(data_dims, PB.NamedDimension(ddn, dds, dd_coords))
             end
 
-            for (vnamenetcdf, var) in dsg
+            for (vnamenetcdf, var) in dsgvars
                 if haskey(var.attrib, "var_name") # a PALEO variable, not eg a grid variable                    
                     attributes = netcdf_to_attributes(var)
                     vname = netcdf_to_name(vnamenetcdf, attributes)
                     metadata[vname] = attributes
                     vdata = netcdf_to_variable(
-                        dsg,
+                        var,
                         coords_record, 
-                        vnamenetcdf, 
                         attributes,
                         grid,
                         spatial_packfn,
@@ -981,6 +1005,7 @@ function variable_to_netcdf!(
     grid::Union{Nothing, PB.AbstractMesh}, 
     attributes;
     add_coordinates=false,
+    define_only=true,
 ) where {NS, ND, S <: PB.AbstractSpace}
 
     if space === PB.ScalarSpace
@@ -1009,21 +1034,23 @@ function variable_to_netcdf!(
     field_data_dims = field_data_netcdf_dimensions(field_data)
     vdata = field_data_to_netcdf(field_data, vdata)
 
-    v = NCDatasets.defVar(ds, vname, vdata, (field_data_dims..., spatial_dims..., data_dims..., v_records_dim...))
-
+    # if define_only = true, only define the variable, don't actually write the data
+    # (allows optimisation as netcdf is slow to swap between 'define' and 'data' mode)
+    vdt = define_only ? eltype(vdata) : vdata
+    v = NCDatasets.defVar(ds, vname, vdt, (field_data_dims..., spatial_dims..., data_dims..., v_records_dim...))
+   
     attributes_to_netcdf!(v, attributes)
     if add_coordinates
         v.attrib["coordinates"] = join(coordinates, " ") # TODO CF convention for coordinates ?
     end
    
-    return nothing
+    return (v, vdata)
 end
 
 # read a variable from netcdf
 function netcdf_to_variable(
-    ds,
+    var,
     coords_record::AbstractString,
-    vname::AbstractString, 
     attributes,
     grid,
     spatial_packfn,
@@ -1034,7 +1061,6 @@ function netcdf_to_variable(
     space = attributes[:space]
     data_dims = attributes[:data_dims]
 
-    var = ds[vname]
     vdata = var[:] # convert to Julia Array
 
     vdata = netcdf_to_field_data(vdata, field_data)
@@ -1209,10 +1235,10 @@ function subdomain_to_netcdf!(ds, name::AbstractString, subdom::PB.Grids.Interio
     v.attrib["subdomain_type"] = "InteriorSubdomain"
 end
 
-function netcdf_to_subdomains(ds)
+function netcdf_to_subdomains(dsvars)
     subdomains = Dict{String, PB.AbstractSubdomain}()
 
-    for (vname, v) in ds
+    for (vname, v) in dsvars
         if haskey(v.attrib, "subdomain_type")
             subdomain_type = v.attrib["subdomain_type"]
             if subdomain_type == "BoundarySubdomain"
@@ -1370,7 +1396,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.CartesianLinearGrid{N}) where {N}
     return (Tuple(grid.dimnames), spatial_unpackfn)
 end
 
-function netcdf_to_grid(ds::NCDatasets.Dataset)
+function netcdf_to_grid(ds::NCDatasets.Dataset, dsvars::Dict)
     gridtypes = Dict(
         "Nothing" => Nothing,
         "UnstructuredVectorGrid" => PB.Grids.UnstructuredVectorGrid,
@@ -1380,17 +1406,17 @@ function netcdf_to_grid(ds::NCDatasets.Dataset)
 
     gridtypestring = ds.attrib["PALEO_GridType"]
     if haskey(gridtypes, gridtypestring)
-        return netcdf_to_grid(gridtypes[gridtypestring], ds)
+        return netcdf_to_grid(gridtypes[gridtypestring], ds, dsvars)
     else
         error("invalid PALEO_GridType $gridtypestring")
     end
 end
 
-netcdf_to_grid(::Type{Nothing}, ds::NCDatasets.Dataset) = (nothing, identity)
+netcdf_to_grid(::Type{Nothing}, ds::NCDatasets.Dataset, dsvars::Dict) = (nothing, identity)
 
-function netcdf_to_grid(::Type{PB.Grids.UnstructuredVectorGrid}, ds::NCDatasets.Dataset)
+function netcdf_to_grid(::Type{PB.Grids.UnstructuredVectorGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
     ncells = ds.dim["cells"]
-    subdomains = netcdf_to_subdomains(ds)
+    subdomains = netcdf_to_subdomains(dsvars)
 
     vec_cellnames = Symbol.(ncattrib_as_vector(ds, "PALEO_cellnames"))
     vec_cellnames_indices = ncattrib_as_vector(ds, "PALEO_cellnames_indices") .+ 1 # netcdf is zero offset
@@ -1399,14 +1425,14 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredVectorGrid}, ds::NCDatasets.
     return (PB.Grids.UnstructuredVectorGrid(ncells, cellnames, subdomains), identity)
 end
 
-function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.Dataset)
+function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
     ncells = ds.dim["cells"]
-    subdomains = netcdf_to_subdomains(ds)  
+    subdomains = netcdf_to_subdomains(dsvars)  
 
     # convert contiguous ragged array representation
     # back to vector-of-vectors 
-    cells_in_column = ds["cells_in_column"][:] # number of cells in each column
-    Icolumns_indices = ds["Icolumns"][:] .+ 1  # netcdf is zero based
+    cells_in_column = dsvars["cells_in_column"][:] # number of cells in each column
+    Icolumns_indices = dsvars["Icolumns"][:] .+ 1  # netcdf is zero based
     Icolumns = Vector{Vector{Int}}()
     colstart = 1
     for cells_this_column in cells_in_column
@@ -1417,15 +1443,15 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.
     # optional z_coords
     z_coords = PB.FixedCoord[]
     for z_coord_name in ncattrib_as_vector(ds, "PALEO_z_coords")
-        var = ds[z_coord_name]
+        var = dsvars[z_coord_name]
         attributes = netcdf_to_attributes(var)
         !("records" in NCDatasets.dimnames(var)) || error("z_coord variable $z_coord_name is not constant! (has a records dimension)")
         push!(z_coords, PB.FixedCoord(z_coord_name, var[:], attributes))
     end
   
     # optional column labels
-    if haskey(ds, "columnnames")
-        columnnames = Symbol.(ds["columnnames"][:])
+    if haskey(dsvars, "columnnames")
+        columnnames = Symbol.(dsvars["columnnames"][:])
     else
         columnnames = Symbol[]
     end
@@ -1433,12 +1459,12 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.
     return (PB.Grids.UnstructuredColumnGrid(ncells, Icolumns, z_coords, columnnames, subdomains), identity)
 end
 
-function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dataset)
+function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
     
     ncells = ds.dim["cells"]
     ncolumns = ds.attrib["PALEO_columns"]
 
-    subdomains = netcdf_to_subdomains(ds)  
+    subdomains = netcdf_to_subdomains(dsvars)  
 
     # dimensions and coordinates
     dimnames = ncattrib_as_vector(ds, "PALEO_dimnames")
@@ -1452,8 +1478,8 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dat
 
     for (i, dimname) in enumerate(dimnames)
         push!(dims, ds.dim[dimname])
-        if haskey(ds, dimname)
-            dimvar = ds[dimname]
+        if haskey(dsvars, dimname)
+            dimvar = dsvars[dimname]
             push!(coords, dimvar[:])
             axis = get(dimvar.attrib, "axis", nothing)
             if axis == "X"
@@ -1464,7 +1490,7 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dat
                 global zdim = i
             end
             bndsname = dimname*"_bnds"
-            if haskey(ds, bndsname)
+            if haskey(dsvars, bndsname)
                 push!(coords_edges, vcat(ds[bndsname][1, :], ds[bndsname][2, end]))
             end
         end
@@ -1473,7 +1499,7 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dat
     isempty(coords_edges) || (length(coords_edges) == length(dimnames)) || error("spatial coordinates edges present but not on all dimensions")
      
     # convert back to linear vectors
-    linear_index = ds["linear_index"][:] .+ 1 # netcdf zero based
+    linear_index = dsvars["linear_index"][:] .+ 1 # netcdf zero based
     # reconstruct cartesian index 
     cartesian_index = Vector{CartesianIndex{length(dims)}}()
     lin_cart_index = Int[]
