@@ -812,8 +812,8 @@ function save_netcdf(
     # Fails with variables with missing values eg that are  Union{Missing, Float64}
     # appears to be a NCDatasets.jl limitation (at least in v0.12.17) - the logic to map these to netcdf is 
     # combined with that to write the data, and the alternate form with just the type fails
-    # define_all_first = false 
-    define_all_first = true
+    define_all_first = false 
+    # define_all_first = true
 
     @info "saving to $filename ..."
 
