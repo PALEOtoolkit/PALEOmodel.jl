@@ -798,20 +798,22 @@ Save to `filename` in netcdf4 format (NB: filename must either have no extension
 # Keyword arguments
 - `check_ext::Bool = true`: check that filename ends in ".nc"
 - `add_coordinates::Bool = false`: true to attempt to add CF convention coords to variables (experimental, doesn't look that useful)
-- `define_all_first::Bool = true` : true to make two passes through each Domain, first to define variables and then to add data
-  (optimisation, speeds up writes at cost of more memory)
 """
 function save_netcdf(
     output::OutputMemory, filename;
     additional_attributes::AbstractVector{<:Pair{<:AbstractString, <:Any}} = Pair{String, String}[],
     check_ext::Bool=true,
     add_coordinates::Bool=false,
-    define_all_first::Bool=true,
 )
-
     if check_ext
         filename = _check_filename_ext(filename, ".nc")
     end
+
+    # Fails with variables with missing values eg that are  Union{Missing, Float64}
+    # appears to be a NCDatasets.jl limitation (at least in v0.12.17) - the logic to map these to netcdf is 
+    # combined with that to write the data, and the alternate form with just the type fails
+    # define_all_first = false 
+    define_all_first = true
 
     @info "saving to $filename ..."
 
@@ -1036,6 +1038,8 @@ function variable_to_netcdf!(
 
     # if define_only = true, only define the variable, don't actually write the data
     # (allows optimisation as netcdf is slow to swap between 'define' and 'data' mode)
+    # TODO fails if vdata contains missing (so eltype is eg Union{Missing, Float64}) at least with NCDatsets v0.12.17
+    # https://github.com/Alexander-Barth/NCDatasets.jl/issues/223
     vdt = define_only ? eltype(vdata) : vdata
     v = NCDatasets.defVar(ds, vname, vdt, (field_data_dims..., spatial_dims..., data_dims..., v_records_dim...))
    
