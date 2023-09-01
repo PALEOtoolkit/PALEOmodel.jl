@@ -66,9 +66,12 @@ function create_split_dae(
     @nospecialize(inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=identity)),
     generated_dispatch=true,
 )
-    @info "\n"*lpad("", 80, "=")*"\n"*
-        "create_split_dae: start\n"*
-        lpad("", 80, "=")
+    @info """
+
+    ================================================================================
+    create_split_dae: start
+    ================================================================================
+    """
 
     PB.check_modeldata(model, modeldata)
 
@@ -339,9 +342,12 @@ function create_split_dae(
         cellworksp_jacsparse,
     )
 
-    @info "\n"*lpad("", 80, "=")*"\n"*
-        "create_split_dae: done\n"*
-        lpad("", 80, "=")
+    @info """
+
+    ================================================================================
+    create_split_dae: done
+    ================================================================================
+    """
 
     return (ms, initial_state_outer, jacouter_prototype)
 end

@@ -52,9 +52,12 @@ function initialize!(
     create_dispatchlists_all=true,
     generated_dispatch=true,
 )
-    @info "\n"*lpad("", 80, "=")*"\n"*
-        "PALEOmodel.initialize! start\n"*
-        lpad("", 80, "=")*"\n"
+    @info """
+
+    ================================================================================
+    PALEOmodel.initialize! start
+    ================================================================================
+    """
 
     modeldata = PB.create_modeldata(model, eltype; threadsafe)
    
@@ -95,9 +98,12 @@ function initialize!(
 
     initial_state = get_statevar(modeldata.solver_view_all)
      
-    @info "\n"*lpad("", 80, "=")*"\n"*
-        "PALEOmodel.initialize! done\n"*
-        lpad("", 80, "=")*"\n"
+    @info """
+
+    ================================================================================
+    PALEOmodel.initialize! done
+    ================================================================================
+    """
 
     return (initial_state, modeldata)
 end
