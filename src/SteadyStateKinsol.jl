@@ -63,6 +63,16 @@ function steadystate_ptc(
     verbose=false,
     BLAS_num_threads=1
 )
+    io = IOBuffer()
+    println(io)
+    println(io, lpad("", 80, "="))
+    println(io, "PALEOmodel.SteadyStateKinsol.steadystate_ptc:")
+    println(io, "    tspan=$tspan")
+    println(io, "    tss_output=$tss_output")
+    println(io, lpad("", 80, "="))
+    println(io)
+    @info String(take!(io))
+
     PB.check_modeldata(run.model, modeldata)
 
     # start, end times
@@ -79,7 +89,7 @@ function steadystate_ptc(
 
     if use_jac_ad_preconditioner
         # Define preconditioner setup function
-        @info "steadystate:  using Jacobian :ForwardDiffSparse as preconditioner"
+        @info "steadystate_ptc:  using Jacobian :ForwardDiffSparse as preconditioner"
         jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
             :ForwardDiffSparse, run.model, initial_state, modeldata, tss,
             request_adchunksize=request_adchunksize,
@@ -245,10 +255,10 @@ function steadystate_ptc(
 
         userdata.tmodel[] += userdata.deltat[]
 
-        verbose && @info lpad("", 80, "=")
-        @info "steadystate: ptc_iter $ptc_iter tss $(userdata.tmodel[]) "*
-            "deltat=$(userdata.deltat[]) deltat_full=$(deltat_full) calling kinsol..."
-        verbose && @info lpad("", 80, "=")
+        verbose && @info lpad("", 80, "=")*"\n"*
+            "steadystate_ptc: ptc_iter $ptc_iter tss $(userdata.tmodel[]) "*
+            "deltat=$(userdata.deltat[]) deltat_full=$(deltat_full) calling kinsol...\n"*
+            lpad("", 80, "=")
         
         sol_ok = true
         try

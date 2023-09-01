@@ -224,7 +224,7 @@ set_tforce!(sv::SolverView, t) = PB.set_values!(sv.hostdep, Val(:global), Val(:t
 
 SolverView(
     model, modeldata::PB.AbstractModelData, arrays_idx::Int;
-    verbose=true,
+    verbose=false,
 ) = SolverView(
         model, modeldata, arrays_idx, modeldata.cellranges_all;
         indices_from_cellranges=false, verbose=verbose,
@@ -366,7 +366,8 @@ function set_default_solver_view!(
     PB.check_modeldata(model, modeldata)  
 
     # create a default SolverView for the entire model (from modeldata.cellranges_all)
-    sv = SolverView(model, modeldata, 1)
+    @info "set_default_solver_view:"
+    sv = SolverView(model, modeldata, 1; verbose=true)
    
     modeldata.solver_view_all = sv
     

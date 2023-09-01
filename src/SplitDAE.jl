@@ -66,6 +66,9 @@ function create_split_dae(
     @nospecialize(inner_kwargs=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=identity)),
     generated_dispatch=true,
 )
+    @info "\n"*lpad("", 80, "=")*"\n"*
+        "create_split_dae: start\n"*
+        lpad("", 80, "=")
 
     PB.check_modeldata(model, modeldata)
 
@@ -234,8 +237,8 @@ function create_split_dae(
     println(io, "        jacouter_implicit (from inner variables): nnz=$(SparseArrays.nnz(jacouter_implicit))")
     jacouter_implicit.nzval .= 1.0  # fill with 1.0 to avoid any risk of spurious cancellations
     jacouter_prototype += jacouter_implicit
-    println(io, "        jacouter (all variables):")
     jacouter_prototype = SparseUtils.fill_sparse_jac(jacouter_prototype; val=1.0, fill_diagonal=true)
+    println(io, "        jacouter (all variables): nnz=$(SparseArrays.nnz(jacouter_prototype))")
 
     end # timeit
     #########################################################################
@@ -335,6 +338,10 @@ function create_split_dae(
         dG_dcellinner_lu,
         cellworksp_jacsparse,
     )
+
+    @info "\n"*lpad("", 80, "=")*"\n"*
+        "create_split_dae: done\n"*
+        lpad("", 80, "=")
 
     return (ms, initial_state_outer, jacouter_prototype)
 end

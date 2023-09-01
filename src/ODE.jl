@@ -51,6 +51,8 @@ function ODEfunction(
     jac_ad_t_sparsity=nothing,    
     generated_dispatch=true,
 )
+    @info "ODEfunction: using Jacobian $jac_ad"
+
     PB.check_modeldata(model, modeldata)
 
     # check for implicit total variables
@@ -67,8 +69,6 @@ function ODEfunction(
     end
 
     m = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
-
-    @info "ODEfunction: using Jacobian $jac_ad"
        
     jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity;
@@ -170,7 +170,21 @@ function integrate(
     BLAS_num_threads=1,
     generated_dispatch=true,
 )
-  
+    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
+
+    io = IOBuffer()
+    println(io)
+    println(io, lpad("", 80, "="))
+    println(io, "PALEOmodel.ODE.integrate:")
+    println(io, "    tspan: $tspan")
+    println(io, "    algorithm: $alg")
+    println(io, "    Jacobian: $jac_ad")
+    println(io, "    steadystate: $steadystate")
+    println(io, "    using $(LinearAlgebra.BLAS.get_num_threads()) BLAS threads")
+    println(io, lpad("", 80, "="))
+    println(io)
+    @info String(take!(io))
+
     f = ODEfunction(
         run.model, modeldata;   
         jac_ad,
@@ -179,20 +193,11 @@ function integrate(
         generated_dispatch,
     )
  
-    io = IOBuffer()
-    println(io, lpad("", 80, "="))
     if steadystate
-        println(io, "integrate:  SteadyStateProblem using algorithm: $alg Jacobian $jac_ad")
         prob = SciMLBase.SteadyStateProblem(f, initial_state, nothing)
     else
-        println(io, "integrate:  ODEProblem using algorithm: $alg Jacobian $jac_ad")
         prob = SciMLBase.ODEProblem(f, initial_state, tspan, nothing)
     end
-
-    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
-    println(io, "    using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads")
-    println(io, lpad("", 80, "="))
-    @info String(take!(io))
    
     @time sol = SciMLBase.solve(prob, alg; solvekwargs...);
 
@@ -201,6 +206,14 @@ function integrate(
     if !isnothing(outputwriter)
         calc_output_sol!(outputwriter, run.model, sol, tspan, initial_state, modeldata)
     end
+
+    io = IOBuffer()
+    println(io)
+    println(io, lpad("", 80, "="))
+    println(io, "PALEOmodel.ODE.integrate: done")
+    println(io, lpad("", 80, "="))
+    println(io)
+    @info String(take!(io))
 
     return sol
 end
@@ -264,6 +277,19 @@ function integrateDAE(
     BLAS_num_threads=1,
     generated_dispatch=true,
 )
+    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
+
+    io = IOBuffer()
+    println(io)
+    println(io, lpad("", 80, "="))
+    println(io, "PALEOmodel.ODE.integrateDAE:")
+    println(io, "    tspan: $tspan")
+    println(io, "    algorithm: $alg")
+    println(io, "    Jacobian: $jac_ad")
+    println(io, "    using $(LinearAlgebra.BLAS.get_num_threads()) BLAS threads")
+    println(io, lpad("", 80, "="))
+    println(io)
+    @info String(take!(io))
     
     func = DAEfunction(
         run.model, modeldata;   
@@ -284,14 +310,6 @@ function integrateDAE(
         func, initial_deriv, initial_state, tspan, nothing;
         differential_vars,
     )
-
-    io = IOBuffer()
-    println(io, lpad("", 80, "="))
-    println(io, "integrateDAE:  DAEProblem using algorithm: $alg Jacobian $jac_ad")
-    LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
-    println(io, "    using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads")
-    println(io, lpad("", 80, "="))
-    @info String(take!(io))
    
     @time sol = SciMLBase.solve(prob, alg; solvekwargs...);
 
@@ -300,6 +318,14 @@ function integrateDAE(
     if !isnothing(outputwriter)
         calc_output_sol!(outputwriter, run.model, sol, tspan, initial_state, modeldata)
     end
+
+    io = IOBuffer()
+    println(io)
+    println(io, lpad("", 80, "="))
+    println(io, "PALEOmodel.ODE.integrateDAE: done")
+    println(io, lpad("", 80, "="))
+    println(io)
+    @info String(take!(io))
 
     return sol
 end
@@ -522,6 +548,7 @@ function print_sol_stats end
 function print_sol_stats(sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution})
 
     io = IOBuffer()
+    println(io)
     println(io, lpad("", 80, "="))
     println(io, "print_sol_stats:")
     println(io, "  retcode=$(sol.retcode)")
@@ -533,7 +560,7 @@ function print_sol_stats(sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution
     println(io, "  length(sol.t) $(length(sol.t))")
     println(io, "  size(sol) $(size(sol))")
     println(io, lpad("", 80, "="))
-
+    println(io)
     @info String(take!(io))
 
     return nothing
@@ -542,16 +569,15 @@ end
 function print_sol_stats(sol::SciMLBase.NonlinearSolution)
 
     io = IOBuffer()
+    println(io)
     println(io, lpad("", 80, "="))
     println(io, "print_sol_stats:")
     println(io, "  retcode=$(sol.retcode)")
-    
     # println(io, "  prob=$(sol.prob)")
     println(io, "  alg=$(sol.alg)")
-   
-    println(io, "  size(sol) $(size(sol))")
+       println(io, "  size(sol) $(size(sol))")
     println(io, lpad("", 80, "="))
-
+    println(io)
     @info String(take!(io))
 
     return nothing
