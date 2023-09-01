@@ -56,6 +56,15 @@ function steadystate(
     BLAS_num_threads=1,
     generated_dispatch=true,
 )
+    @info """
+    
+    ================================================================================
+    PALEOmodel.SteadyState.steadystate
+        tss=$tss
+        jac_ad=$jac_ad
+    ================================================================================
+    """
+
     PB.check_modeldata(run.model, modeldata)
 
     LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
@@ -91,21 +100,28 @@ function steadystate(
 
     end
     
-    @info lpad("", 80, "=")
-    @info "steadystate: calling nlsolve..."
-    @info lpad("", 80, "=")
+    @info """
+    
+    ================================================================================
+    steadystate: calling nlsolve...
+    ================================================================================
+    """
+
     @time sol = NLsolve.nlsolve(nldf, copy(initial_state); solvekwargs...);
     
-    @info lpad("", 80, "=")
-    @info " * Algorithm: $(sol.method)"
-    @info " * Inf-norm of residuals: $(sol.residual_norm)"
-    @info " * Iterations: $(sol.iterations)"
-    @info " * Convergence: $(NLsolve.converged(sol))"
-    @info "   * |x - x'| < $(sol.xtol): $(sol.x_converged)"
-    @info "   * |f(x)| < $(sol.ftol): $(sol.f_converged)"
-    @info " * Function Calls (f): $(sol.f_calls)"
-    @info " * Jacobian Calls (df/dx): $(sol.g_calls)"
-    @info lpad("", 80, "=")
+    @info """
+    
+    ================================================================================
+        * Algorithm: $(sol.method)
+        * Inf-norm of residuals: $(sol.residual_norm)
+        * Iterations: $(sol.iterations)
+        * Convergence: $(NLsolve.converged(sol))
+            * |x - x'| < $(sol.xtol): $(sol.x_converged)
+            * |f(x)| < $(sol.ftol): $(sol.f_converged)
+        * Function Calls (f): $(sol.f_calls)
+        * Jacobian Calls (df/dx): $(sol.g_calls)
+    ================================================================================
+    """
 
     resid = similar(initial_state)
     ssf!(resid, sol.zero)
@@ -202,6 +218,16 @@ function steadystate_ptc(
     BLAS_num_threads=1,
     generated_dispatch=true,
 )
+    @info """
+    
+    ================================================================================
+    PALEOmodel.SteadyState.steadystate_ptc:
+        tspan=$tspan
+        tss_output=$tss_output
+        jac_ad=$jac_ad
+    ================================================================================
+    """
+
     PB.check_modeldata(run.model, modeldata)
 
     !use_norm || ArgumentError("use_norm=true not supported")
@@ -323,13 +349,23 @@ function steadystate_ptc_splitdae(
     BLAS_num_threads=1,
     generated_dispatch=true,
 )
+
+    @info """
+    
+    ================================================================================
+    PALEOmodel.SteadyState.steadystate_ptc_splitdae:
+        tspan=$tspan
+        tss_output=$tss_output
+    ================================================================================
+    """
+
     PB.check_modeldata(run.model, modeldata)
 
-    isnothing(sol_min) || @warn "steadystate_ptc_splitdae: 'sol_min' is deprecated: replace with 'solve_kwargs=(project_region! = x->clamp!(x, sol_min, sol_max), )'"
+    isnothing(sol_min) || @warn "steadystate_ptc_splitdae: 'sol_min' is deprecated: replace with 'solve_kwargs=(project_region!=PALEOmodel.SolverFunctions.ClampAll!(sol_min, Inf), )'"
 
     if :u_min in keys(inner_kwargs)
         if ! (:project_region in keys(inner_kwargs))
-            @warn "steadystate_ptc_splitdae inner_kwargs.u_min is deprecated: replace with project_region=x->clamp.(x, u_min, Inf)"
+            @warn "steadystate_ptc_splitdae inner_kwargs.u_min is deprecated: replace with project_region=PALEOmodel.SolverFunctions.ClampAll(u_min, Inf)"
             u_min = inner_kwargs.u_min
             inner_kwargs = NamedTuple(k=>v for (k, v) in pairs(inner_kwargs) if k != :u_min)
             inner_kwargs = merge(inner_kwargs, (project_region = x->clamp.(x, u_min, Inf),))
@@ -394,9 +430,14 @@ function solve_ptc(
 
     # workaround Julia BLAS default (mis)configuration that defaults to multi-threaded
     LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
-    @info "steadystate_ptc:  using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads"
- 
+
+    @info """
     
+    ================================================================================
+    solve_ptc:  using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads
+    ================================================================================
+    """
+
     ############################################################
     # Vectors to accumulate solution at each pseudo-timestep
     #########################################################
@@ -446,9 +487,11 @@ function solve_ptc(
 
         tss += deltat
 
-        verbose && @info lpad("", 80, "=")
-        @info "steadystate_ptc: ptc_iter $ptc_iter tss $(tss) deltat=$(deltat) deltat_full=$deltat_full failed_iter=$failed_iter calling nlsolve..."
-        verbose && @info lpad("", 80, "=")
+        io = IOBuffer()
+        verbose && println(io, "================================================================================")
+        println(io, "solve_ptc: ptc_iter $ptc_iter tss $(tss) deltat=$(deltat) deltat_full=$deltat_full failed_iter=$failed_iter calling nlsolve...")
+        verbose && println(io, "================================================================================")
+        @info String(take!(io))
         
         sol_ok = true
         sol_progress = true
@@ -458,18 +501,19 @@ function solve_ptc(
             sol = NLsolve.nlsolve(nldf, previous_state; solvekwargs...)
             
             if verbose
-                io = IOBuffer()
-                println(io, lpad("", 80, "="))
-                println(io, " * Algorithm: $(sol.method)")
-                println(io, " * Inf-norm of residuals: $(sol.residual_norm)")
-                println(io, " * Iterations: $(sol.iterations)")
-                println(io, " * Convergence: $(NLsolve.converged(sol))")
-                println(io, "   * |x - x'| < $(sol.xtol): $(sol.x_converged)")
-                println(io, "   * |f(x)| < $(sol.ftol): $(sol.f_converged)")
-                println(io, " * Function Calls (f): $(sol.f_calls)")
-                println(io, " * Jacobian Calls (df/dx): $(sol.g_calls)")
-                println(io, lpad("", 80, "="))
-                @info String(take!(io))
+                @info """
+                
+                ================================================================================
+                 * Algorithm: $(sol.method)
+                 * Inf-norm of residuals: $(sol.residual_norm)
+                 * Iterations: $(sol.iterations)
+                 * Convergence: $(NLsolve.converged(sol))
+                   * |x - x'| < $(sol.xtol): $(sol.x_converged)
+                   * |f(x)| < $(sol.ftol): $(sol.f_converged)
+                 * Function Calls (f): $(sol.f_calls)
+                 * Jacobian Calls (df/dx): $(sol.g_calls)
+                ================================================================================
+                """
 
                 ssf!(worksp, sol.zero)
                 @info "  check F inf-norm $(norm(worksp, Inf)) 2-norm $(norm(worksp, 2))"
@@ -556,6 +600,14 @@ function solve_ptc(
     set_step!(ssFJ!, tss, 0.0, previous_state, initial_inner_state) # restore initial_inner_state
     # NB: if using split dae with inner_state, this is updated in modeldata arrays as output is recalculated
     PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modelode, modeldata)
+
+    @info """
+    
+    ================================================================================
+    solve_ptc:  done
+    ================================================================================
+    """
+
     return nothing    
 end
 
@@ -684,12 +736,12 @@ function nlsolveF_PTC(
     modelode = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
 
     if jac_ad==:NoJacobian
-        @info "steadystate: no Jacobian"
+        @info "nlsolveF_PTC: no Jacobian"
         # Define the function we want to solve 
         ssFJ! = FJacPTC(modelode, nothing, tss, deltat, nothing, nothing, previous_u, du_worksp)
         nldf = NLsolve.OnceDifferentiable(ssFJ!, similar(initial_state), similar(initial_state)) 
     else       
-        @info "steadystate:  using Jacobian $jac_ad"
+        @info "nlsolveF_PTC:  using Jacobian $jac_ad"
         jacode, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
             jac_ad, model, initial_state, modeldata, tss_jac_sparsity;
             request_adchunksize,

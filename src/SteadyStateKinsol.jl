@@ -63,6 +63,15 @@ function steadystate_ptc(
     verbose=false,
     BLAS_num_threads=1
 )
+    @info """
+    
+    ================================================================================
+    PALEOmodel.SteadyStateKinsol.steadystate_ptc:
+        tspan=$tspan
+        tss_output=$tss_output
+    ================================================================================
+    """
+  
     PB.check_modeldata(run.model, modeldata)
 
     # start, end times
@@ -79,7 +88,7 @@ function steadystate_ptc(
 
     if use_jac_ad_preconditioner
         # Define preconditioner setup function
-        @info "steadystate:  using Jacobian :ForwardDiffSparse as preconditioner"
+        @info "steadystate_ptc:  using Jacobian :ForwardDiffSparse as preconditioner"
         jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
             :ForwardDiffSparse, run.model, initial_state, modeldata, tss,
             request_adchunksize=request_adchunksize,
@@ -245,11 +254,12 @@ function steadystate_ptc(
 
         userdata.tmodel[] += userdata.deltat[]
 
-        verbose && @info lpad("", 80, "=")
-        @info "steadystate: ptc_iter $ptc_iter tss $(userdata.tmodel[]) "*
-            "deltat=$(userdata.deltat[]) deltat_full=$(deltat_full) calling kinsol..."
-        verbose && @info lpad("", 80, "=")
-        
+        verbose && @info """
+
+            ================================================================================
+            steadystate_ptc: ptc_iter $ptc_iter tss $(userdata.tmodel[]) deltat=$(userdata.deltat[]) deltat_full=$(deltat_full) calling kinsol...
+            ================================================================================
+            """        
         sol_ok = true
         try
             # solve nonlinear system for this pseudo-timestep
