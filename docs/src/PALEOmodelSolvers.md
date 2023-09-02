@@ -48,6 +48,7 @@ CurrentModule = PALEOmodel.SteadyState
 steadystate
 steadystate_ptc
 steadystate_ptc_splitdae
+ConservationCallback
 ```
 
 Function objects to project Newton steps into valid regions:
