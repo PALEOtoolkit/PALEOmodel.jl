@@ -194,6 +194,7 @@ to the rate of convergence, so requires some trial-and-error to set an appropiat
   (eg to restrict to an approximate Jacobian by using a cellrange with a non-default `operatorID`: in this case, Variables that are not calculated
   but needed for the Jacobian should set the `transfer_jacobian` attribute so that they will be copied)
 - `enforce_noneg=false`: fail pseudo-timesteps that generate negative values for state variables.
+- `step_callbacks=[]`: callbacks on succesful step, `[step_callback(sol.zero, tss, deltat, model, modeldata)]`
 - `use_norm=false`: not supported (must be false)
 - `verbose=false`: true for detailed output
 - `BLAS_num_threads=1`: restrict threads used by Julia BLAS (likely irrelevant if using sparse Jacobian?)
@@ -212,6 +213,7 @@ function steadystate_ptc(
     request_adchunksize=10,
     jac_cellranges=modeldata.cellranges_all,
     enforce_noneg=false,
+    step_callbacks=[],
     sol_min=nothing, # deprecated
     use_norm::Bool=false,
     verbose=false,
@@ -252,6 +254,7 @@ function steadystate_ptc(
         outputwriter,
         solvekwargs,
         enforce_noneg,
+        step_callbacks,
         verbose,
         BLAS_num_threads,
     )
@@ -346,6 +349,7 @@ function steadystate_ptc_splitdae(
     inner_jac_ad=:ForwardDiff,
     inner_start=:current,
     @nospecialize(inner_kwargs::NamedTuple=(verbose=0, miniters=2, reltol=1e-12, jac_constant=true, project_region=identity)),
+    step_callbacks=[],
     BLAS_num_threads=1,
     generated_dispatch=true,
 )
@@ -400,6 +404,7 @@ function steadystate_ptc_splitdae(
         outputwriter,
         solvekwargs,
         enforce_noneg,
+        step_callbacks,
         verbose,
         BLAS_num_threads,
     )
@@ -407,6 +412,95 @@ function steadystate_ptc_splitdae(
 
     return nothing    
 end
+
+
+"""
+    ConservationCallback(
+        tmodel_start::Float64 # earliest model time to apply correction
+        content_name::String # variable with a total of X
+        flux_name::String  # variable with a corresponding boundary flux of X
+        reservoir_total_name::String  # total for reservoir to apply correction to
+        reservoir_statevar_name::String # state variable for reservoir to apply correction to
+        reservoir_fac::Float64  # stoichiometric factor (1 / moles of quantity X per reservoir molecule)
+    ) -> ccb
+
+Provides a callback function with signature
+
+    ccb(state, tmodel, deltat, model, modeldata)
+
+that modifies `modeldata` arrays and `state` to enforce budget conservation.
+
+# Example
+
+    conservation_callback_H = Callbacks.ConservationCallback(
+        tmodel_start=1e5,
+        content_name="global.content_H_atmocean",
+        flux_name="global.total_H",
+        reservoir_total_name="atm.CH4_total", # "atm.H2_total",
+        reservoir_statevar_name="atm.CH4_mr", # "atm.H2_mr",
+        reservoir_fac=0.25 # 0.5, # H per reservoir molecule
+    )
+
+    then add to eg `steadystate_ptc_splitdae` with `step_callbacks` keyword argument:
+
+        step_callbacks = [conservation_callback_H]
+
+"""
+Base.@kwdef mutable struct ConservationCallback
+    tmodel_start::Float64
+    last_content::Float64 = NaN
+    last_flux::Float64 = NaN
+    content_name::String
+    flux_name::String
+    reservoir_total_name::String
+    reservoir_statevar_name::String
+    reservoir_fac::Float64
+end
+
+function (ccb::ConservationCallback)(
+    state, tss, deltat, model, modeldata
+)
+
+    content = only(PB.get_data(PB.get_variable(model, ccb.content_name), modeldata))
+    flux = only(PB.get_data(PB.get_variable(model, ccb.flux_name), modeldata))
+    av_flux = 0.5*(ccb.last_flux + flux)
+
+    reservoir_total = only(PB.get_data(PB.get_variable(model, ccb.reservoir_total_name), modeldata))
+
+    content_change = content - ccb.last_content
+
+    expected_content_change = av_flux * deltat
+
+    content_error = expected_content_change - content_change 
+
+    reservoir_new_total = reservoir_total + ccb.reservoir_fac*content_error
+
+    if tss > ccb.tmodel_start
+        reservoir_multiplier = reservoir_new_total/reservoir_total
+    else
+        reservoir_multiplier = NaN
+    end
+
+    @info """
+        ConservationCallback: content $(ccb.content_name) $content, flux $(ccb.flux_name) $flux av_flux $av_flux
+                content change: actual $content_change expected $expected_content_change error $content_error
+                reservoir: total $(ccb.reservoir_total_name) $reservoir_total correction multiplier $reservoir_multiplier
+    """
+
+    if !isnan(reservoir_multiplier)
+        # modify state variable in modeldata arrays
+        reservoir_statevar = PB.get_data(PB.get_variable(model, ccb.reservoir_statevar_name), modeldata)
+        reservoir_statevar .*= reservoir_multiplier
+        # copy modified aggregated state vector out from modeldata arrays
+        PB.copyto!(state, modeldata.solver_view_all.stateexplicit)
+    end
+
+    ccb.last_content = content
+    ccb.last_flux = flux
+
+    return !isnan(reservoir_multiplier) # true if state modified
+end
+
 
 """
     solve_ptc(run, initial_state, nlsolveF, tspan, deltat_initial::Float64; kwargs...)
@@ -423,6 +517,7 @@ function solve_ptc(
     @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
     enforce_noneg=false,
     verbose=false,
+    step_callbacks=[],
     BLAS_num_threads=1
 )
 
@@ -461,7 +556,10 @@ function solve_ptc(
     # unpack callable structs from nlsolveF
     ########################################################
     ssFJ!, nldf = nlsolveF
-  
+    modelode = ssFJ!.modelode
+    modeldata = modelode.modeldata
+    model = modeldata.model
+
     #################################################
     # outer loop over pseudo-timesteps
     #################################################
@@ -546,20 +644,6 @@ function solve_ptc(
         end
        
         if sol_ok
-            # record additional state (if any) from succesful step
-            get_state!(inner_state, ssFJ!)
-
-            # very crude pseudo-timestep adaptation (increase on success, reduce on failure)
-            if deltat == deltat_full
-                # we used the full deltat and it worked - increase deltat
-                deltat *= deltat_fac
-            else
-                # we weren't using the full timestep as an output was requested, so go back to full
-                deltat = deltat_full
-            end
-            
-            previous_state .= sol.zero
-          
             # write output record, if required
             # NB: test tss_output not tss_output_filtered, so we don't write every timestep if !isempty(tss_output) but all tss_output filtered out
             if isempty(tss_output) ||                       # all records requested, or ...
@@ -570,6 +654,25 @@ function solve_ptc(
                 push!(soln, copy(sol.zero))
                 iout += 1
             end
+
+            # record additional state (if any) from succesful step
+            get_state!(inner_state, ssFJ!)
+
+            # apply callbacks (if any). May modify state variables
+            for sc in step_callbacks
+                sc(sol.zero, tss, deltat, model, modeldata)
+            end
+            
+            previous_state .= sol.zero
+        
+            # very crude pseudo-timestep adaptation (increase on success, reduce on failure)
+            if deltat == deltat_full
+                # we used the full deltat and it worked - increase deltat
+                deltat *= deltat_fac
+            else
+                # we weren't using the full timestep as an output was requested, so go back to full
+                deltat = deltat_full
+            end           
 
         else
             @warn "iter failed, reducing deltat"
@@ -595,8 +698,6 @@ function solve_ptc(
         push!(soln, copy(sol.zero))
     end
 
-    modelode = ssFJ!.modelode
-    modeldata = modelode.modeldata
     set_step!(ssFJ!, tss, 0.0, previous_state, initial_inner_state) # restore initial_inner_state
     # NB: if using split dae with inner_state, this is updated in modeldata arrays as output is recalculated
     PALEOmodel.ODE.calc_output_sol!(outputwriter, run.model, tsoln, soln, modelode, modeldata)
