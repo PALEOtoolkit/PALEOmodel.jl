@@ -1,7 +1,7 @@
 name = "PALEOmodel"
 uuid = "bf7b4fbe-ccb1-42c5-83c2-e6e9378b660c"
 authors = ["Stuart Daines <stuart.daines@gmail.com>"]
-version = "0.15.33"
+version = "0.15.34"
 
 [deps]
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
@@ -47,7 +47,7 @@ SparseDiffTools = "1.13, 2"
 SparsityTracing = "0.2.3"
 SpecialFunctions = "1, 2"
 StaticArrays = "1.2"
-Sundials = "4.5"
+Sundials = "4.5 - 4.19.3"
 TestEnv = "1.0"
 TimerOutputs = "0.5"
 julia = "1.6"
