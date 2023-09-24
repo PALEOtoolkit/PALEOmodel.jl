@@ -9,8 +9,9 @@ bib = CitationBibliography(
     style=:authoryear,
 )
 
-makedocs(bib, sitename="PALEOmodel Documentation", 
-        pages = [
+makedocs(;
+    sitename="PALEOmodel Documentation", 
+    pages = [
             "index.md",
             "Design" => [
                 "MathematicalFormulation.md",
@@ -26,9 +27,10 @@ makedocs(bib, sitename="PALEOmodel Documentation",
             "References.md",
             "indexpage.md",
         ],
-        format = Documenter.HTML(
-            prettyurls = get(ENV, "CI", nothing) == "true"
-        ),
+    format = Documenter.HTML(
+        prettyurls = get(ENV, "CI", nothing) == "true"
+    ),
+    plugins = [bib],
 )
 
 @info "Local html documentation is available at $(joinpath(@__DIR__, "build/index.html"))"
