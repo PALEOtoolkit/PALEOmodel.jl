@@ -437,7 +437,7 @@ General principle is to project the solution onto an invariant manifold (modifyi
 
 # Example
 
-    conservation_callback_H = Callbacks.ConservationCallback(
+    conservation_callback_H = PALEOmodel.SteadyState.ConservationCallback(
         tmodel_start=1e5,
         content_name="global.content_H_atmocean",
         flux_name="global.total_H",
@@ -446,9 +446,9 @@ General principle is to project the solution onto an invariant manifold (modifyi
         reservoir_fac=0.25 # 0.5, # H per reservoir molecule
     )
 
-    then add to eg `steadystate_ptc_splitdae` with `step_callbacks` keyword argument:
+then add to eg `steadystate_ptc_splitdae` with `step_callbacks` keyword argument:
 
-        step_callbacks = [conservation_callback_H]
+    step_callbacks = [conservation_callback_H]
 
 """
 Base.@kwdef mutable struct ConservationCallback
@@ -504,6 +504,76 @@ function (ccb::ConservationCallback)(
     ccb.last_flux = flux
 
     return !isnan(reservoir_multiplier) # true if state modified
+end
+
+
+"""
+    RestartSmallValuesCallback(
+        stateexplicit::PB.VariableAggregator; 
+        include_variables::Vector{String} = String[v.domain.name*"."*v.name for v in stateexplicit.vars],
+        exclude_variables::Vector{String} = String[],
+        modify_threshold=1e-80,
+        modify_val=1e-30
+    ) -> rsvc
+
+Provides a callback function with signature
+
+    rsvc(state, tmodel, deltat, model, modeldata)
+
+that modifies `state` to reset variables with values < `modify_threshold` to value `modify_val`, hence restarting the Newton solve
+from `modify_val` on the next iteration.
+
+# Example
+
+    restart_small_values_callback = PALEOmodel.SteadyState.RestartSmallValuesCallback(
+        modeldata.solver_view_all.stateexplicit;
+        modify_threshold = 1e-80,
+        modify_val = 1e-30,
+    )
+
+then add to eg `steadystate_ptc_splitdae` with `step_callbacks` keyword argument:
+
+    step_callbacks = [restart_small_values_callback]
+
+"""
+Base.@kwdef mutable struct RestartSmallValuesCallback
+    modify_threshold::Float64
+    modify_val::Float64
+    modify_indices::Vector{Int64}
+end
+
+function RestartSmallValuesCallback(
+    stateexplicit::PB.VariableAggregator; 
+    include_variables::Vector{String} = String[v.domain.name*"."*v.name for v in stateexplicit.vars],
+    exclude_variables::Vector{String} = String[],
+    modify_threshold=1e-80,
+    modify_val=1e-30
+)
+
+    modify_indices = Int64[]
+    for vname in include_variables 
+        if !(vname in exclude_variables)
+            append!(modify_indices, collect(PB.get_indices(stateexplicit, vname)))
+        end
+    end
+
+    return RestartSmallValuesCallback(modify_threshold, modify_val, sort!(modify_indices))
+end
+
+function (rsvc::RestartSmallValuesCallback)(state, tss, deltat, model, modeldata)
+    num_modified = 0
+
+    for i in rsvc.modify_indices
+        if state[i] <= rsvc.modify_threshold
+            state[i] = rsvc.modify_val
+            num_modified += 1
+        end
+    end
+    if num_modified > 0
+        @info "RestartSmallValuesCallback: modified $num_modified values <= $(rsvc.modify_threshold) to $(rsvc.modify_val)"
+    end
+
+    return num_modified > 0
 end
 
 
