@@ -614,6 +614,7 @@ struct CheckValuesCallback
     check_min_value::Float64
     check_max_value::Float64
     check_indices::Vector{Int64}
+    verbose::Bool
 end
 
 function CheckValuesCallback(
@@ -622,6 +623,7 @@ function CheckValuesCallback(
     exclude_variables::Vector{String} = String[],
     check_min_value=-Inf,
     check_max_value=Inf,
+    verbose=false,
 )
 
     check_indices = Int64[]
@@ -631,10 +633,12 @@ function CheckValuesCallback(
         end
     end
 
-    return CheckValuesCallback(check_min_value, check_max_value, sort!(check_indices))
+    return CheckValuesCallback(check_min_value, check_max_value, sort!(check_indices), verbose)
 end
 
-function (cvc::CheckValuesCallback)(state, tss, deltat, model, modeldata)
+(cvc::CheckValuesCallback)(state, tss, deltat, model, modeldata) = cvc(state)
+
+function (cvc::CheckValuesCallback)(state)
     num_out_of_range = 0
 
     for i in cvc.check_indices
@@ -642,7 +646,7 @@ function (cvc::CheckValuesCallback)(state, tss, deltat, model, modeldata)
             num_out_of_range += 1
         end
     end
-    if num_out_of_range > 0
+    if cvc.verbose && num_out_of_range > 0
         @info "    CheckValuesCallback: $num_out_of_range out of range values (valid range $(cvc.check_min_value) - $(cvc.check_max_value))"
     end
 
