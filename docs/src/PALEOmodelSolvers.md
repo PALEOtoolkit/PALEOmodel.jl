@@ -48,6 +48,7 @@ CurrentModule = PALEOmodel.SteadyState
 steadystate
 steadystate_ptc
 steadystate_ptc_splitdae
+solve_ptc
 ConservationCallback
 ```
 
@@ -57,8 +58,10 @@ Function objects to project Newton steps into valid regions:
 CurrentModule = PALEOmodel.SolverFunctions
 ```
 ```@docs
-ClampAll!
+StepClampMultAll!
+StepClampAll!
 ClampAll
+ClampAll!
 ```
 
 ## Steady-state solvers (Sundials Kinsol based):

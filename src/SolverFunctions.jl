@@ -17,7 +17,54 @@ import SparseDiffTools
 # import Infiltrator # Julia debugger
 
 """
-    ca! = ClampAll!(minvalue, maxvalue)
+    StepClampMultAll!(minvalue, maxvalue, minmult, maxmult) -> scma!
+    StepClampMultAll!(minvalue, maxvalue, maxratio) = StepClampMultAll!(minvalue, maxvalue, 1.0/maxratio, maxratio)
+    scma!(x, x_old, newton_step)
+
+Function object to take Newton step `x .= x_old .+ newton_step` and then clamp all values in Vector `x` to specified range using:
+- `clamp!(x, x_old*minmult, x_old*maxmult)`
+- `clamp!(x, minvalue, maxvalue)`
+"""
+struct StepClampMultAll!
+    minvalue::Float64
+    maxvalue::Float64
+    minmult::Float64
+    maxmult::Float64
+end
+
+StepClampMultAll!(minvalue, maxvalue, maxratio) = StepClampMultAll!(minvalue, maxvalue, 1.0/maxratio, maxratio)
+
+function (scma::StepClampMultAll!)(x, x_old, newton_step)
+    for i in eachindex(x)
+        x[i] = x_old[i] + newton_step[i]
+        x[i] = clamp(x[i], x_old[i]*scma.minmult, x_old[i]*scma.maxmult)
+        x[i] = clamp(x[i], scma.minvalue, scma.maxvalue)
+    end
+    return nothing
+end
+
+"""
+    StepClampAll!(minvalue, maxvalue) -> sca!
+    sca!(x, x_old, newton_step)
+
+Function object to take Newton step `x .= x_old .+ newton_step` and then clamp all values in Vector `x` to specified range using
+`clamp!(x, minvalue, maxvalue)`
+"""
+struct StepClampAll!
+    minvalue::Float64
+    maxvalue::Float64
+end
+
+function (sca::StepClampAll!)(x, x_old, newton_step)
+    for i in eachindex(x)
+        x[i] = x_old[i] + newton_step[i]
+        x[i] = clamp(x[i], scma.minvalue, scma.maxvalue)
+    end
+    return nothing
+end
+
+"""
+    ClampAll!(minvalue, maxvalue) -> ca!
     ca!(v)
 
 Function object to clamp all values in Vector `v` to specified range using
