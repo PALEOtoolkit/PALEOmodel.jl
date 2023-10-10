@@ -52,11 +52,18 @@ solve_ptc
 ConservationCallback
 ```
 
-Function objects to project Newton steps into valid regions:
-
 ```@meta
 CurrentModule = PALEOmodel.SolverFunctions
 ```
+Sparse linear solvers adapted to NLsolve interface:
+
+```@docs
+SparseLinsolveUMFPACK
+SparseLinsolveSparspak64x2
+```
+
+Function objects to project Newton steps into valid regions:
+
 ```@docs
 StepClampMultAll!
 StepClampAll!
