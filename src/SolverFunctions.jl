@@ -135,28 +135,31 @@ Create solver function object to solve sparse A x = b using Sparspak lu factoriz
 Includes one step of iterative refinement
 """
 mutable struct SparseLinsolveSparspak64x2
+    A_mf::Union{Nothing, SparseArrays.SparseMatrixCSC{MultiFloats.MultiFloat{Float64, 2}, Int64}}
     A_mf_lu
     verbose::Bool
 
     function SparseLinsolveSparspak64x2(; verbose=false)
-        return new(nothing, verbose)
+        return new(nothing, nothing, verbose)
     end
 end
 
-function (slsp::SparseLinsolveSparspak64x2)(x, A, b)
+function (slsp::SparseLinsolveSparspak64x2)(x::Vector, A::SparseArrays.SparseMatrixCSC, b::Vector)
 
-    A_mf = MultiFloats.Float64x2.(A)
-
-    # Don't try and reuse factorization - Sparspak 3.9 fails with structural non-zeros, nnz(A) > A_mf_lu.slvr.nnz
-    # ie the A_mf_lu solver object has squeezed out structural non-zeros ?
-    # @info "SparseLinsolveSparspak64x2 nnz A = $(SparseArrays.nnz(A))"
-    # if isnothing(slsp.A_mf_lu)
-        slsp.A_mf_lu = Sparspak.sparspaklu(A_mf)
-    # else
-    #     Sparspak.sparspaklu!(slsp.A_mf_lu, A_mf) # reuse ordering and symbolic factorization
-    # end
-    # @info "SparseLinsolveSparspak64x2 nnz A_mf_lu = $(slsp.A_mf_lu.slvr.nnz)"
-
+    if isnothing(slsp.A_mf) 
+        # Julia bug - type conversion squeezes out structural nonzeros !?
+        # slsp.A_mf = MultiFloats.Float64x2.(A)
+        # workaround - convert type by hand, preserving structural nonzeros
+        slsp.A_mf = SparseArrays.SparseMatrixCSC(size(A, 1), size(A, 2), A.colptr, A.rowval, MultiFloats.Float64x2.(A.nzval))
+        slsp.A_mf_lu = Sparspak.sparspaklu(slsp.A_mf)
+    else
+        size(A) == size(slsp.A_mf) || error("size of A has changed")
+        ((A.colptr == slsp.A_mf.colptr) && (A.rowval == slsp.A_mf.rowval)) || error("sparsity pattern of A has changed")
+        slsp.A_mf.nzval .= MultiFloats.Float64x2.(A.nzval)
+        newlu = Sparspak.sparspaklu!(slsp.A_mf_lu, slsp.A_mf) # reuse ordering and symbolic factorization
+        newlu === slsp.A_mf_lu || error("Sparspak.sparspaklu! has not reused lu !!!")
+    end
+  
     # Solve with iterative refinement at Float64x4 precision
     # (high precision is not really needed as x is only returned as a Float64, but 
     # iterative refinement *is* needed to avoid strange numerical noise patterns in solution - bug in Sparspak or MultiFloats?)
