@@ -49,26 +49,39 @@ steadystate
 steadystate_ptc
 steadystate_ptc_splitdae
 solve_ptc
-ConservationCallback
 ```
+
+### Sparse linear solvers adapted to NLsolve interface:
 
 ```@meta
 CurrentModule = PALEOmodel.SolverFunctions
 ```
-Sparse linear solvers adapted to NLsolve interface:
-
 ```@docs
 SparseLinsolveUMFPACK
 SparseLinsolveSparspak64x2
 ```
 
-Function objects to project Newton steps into valid regions:
+### Function objects to project Newton iterations into valid regions:
 
+```@meta
+CurrentModule = PALEOmodel.SolverFunctions
+```
 ```@docs
 StepClampMultAll!
 StepClampAll!
 ClampAll
 ClampAll!
+```
+
+### Function objects to manage outer nonlinear steps:
+
+```@meta
+CurrentModule = PALEOmodel.SteadyState
+```
+```@docs
+ConservationCallback
+RestartSmallValuesCallback
+CheckValuesCallback
 ```
 
 ## Steady-state solvers (Sundials Kinsol based):
