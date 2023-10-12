@@ -579,19 +579,19 @@ end
 """
     solve_ptc(run, initial_state, nlsolveF, tspan, deltat_initial::Float64; kwargs...)
 
-Pseudo-transient continuation using NLsolve.
+Pseudo-transient continuation using `NLsolve.jl`
 
 Not called directly: see [`steadystate_ptc`](@ref), [`steadystate_ptc_splitdae`](@ref)
 
-Find steady-state solution and write to `outputwriter`, using naive pseudo-transient-continuation
+Find the approximate time evolution or accurate steady-state solution for state variables `S` satisfying the ODE `dS/dt = dSdt(S, t)`
+, using naive pseudo-transient-continuation
 with first order implicit Euler pseudo-timesteps from `tspan[1]` to `tspan[2]`
-and [NLsolve.jl](https://github.com/JuliaNLSolvers/NLsolve.jl) as the non-linear solver.
+and [NLsolve.jl](https://github.com/JuliaNLSolvers/NLsolve.jl) as the non-linear solver. 
 
-Each pseudo-timestep solves the nonlinear system
-S(t+Δt) = S(t) + Δt dS/dt(t+Δt)
-for S(t+Δt), using a variant of Newton's method.
+Each pseudo-timestep from time `t` to `t+Δt` uses a variant of Newton's method to solve the nonlinear system
+`S_new = S(t) + Δt dSdt(S_new, t+Δt)` for `S_new = S(t+Δt)`.
 
-Initial pseudo-timestep Δt is `deltat_initial`, this is multiplied by `deltat_fac` for the next iteration
+The initial pseudo-timestep Δt is `deltat_initial`, this is multiplied by `deltat_fac` for the next iteration
 until pseudo-time `tss_max` is reached. If an iteration fails, Δt is divided by `deltat_fac` and the iteration retried.
 NB: this is a _very_ naive initial implementation, there is currently no reliable error control to adapt pseudo-timesteps 
 to the rate of convergence, so requires some trial-and-error to set an appropiate `deltat_fac` for each problem.
@@ -608,7 +608,7 @@ Solver options to pass through to the outer `NLsolve` nonlinear solver are set b
 # Keyword Arguments
 - `deltat_fac=2.0`: factor to increase pseudo-timestep on success
 - `tss_output=Float64[]`: Vector of model times at which to save output (empty Vector to save all output timesteps)
-- `outputwriter=run.output`: output destination
+- `outputwriter=run.output`: container for output
 - `solvekwargs=NamedTuple()`: arguments to pass through to `NLsolve`
 - `max_iter=1000`: maximum number of PTC iterations
 - `max_failed_iter=20`: maximum number of iterations that make no progress (either fail, or no change in solution) before exiting
@@ -623,15 +623,20 @@ Solver options to pass through to the outer `NLsolve` nonlinear solver are set b
   `solve_kwargs=(apply_step! = PALEOmodel.SolverFunctions.StepClampAll!(sol_min, sol_max), )`]
 
 
-# `nlsolveF` function objects
-The `ssFJ` struct should provide a function object to calculate the ODE time derivative (including a solve for any DAE algebraic variables)
-- `ssFJ!.modelode(du, u, p, t)`
+# Function objects `nlsolveF = (ssFJ!, nldf)`
+
+The `nldf` function object should adapt `ssFJ!` to implement the `NLsolve` interface to provide the residual function 
+`f(S_new) = S_new - (S(t) + Δt dSdt(S_new, t+Δt)` (and its jacobian) 
+where the equation `f(S_new) = 0` defines the new state variable `S_new = S(t+Δt)` at new time `t+Δt` after implicit timestep `Δt`.
+
+The `ssFJ!` struct should additionally provide a function object `modelode` to calculate the ODE time derivative `dSdt(S, p, t)` (including a solve for any
+DAE algebraic variables), NB: parameters `p` are not used.
+- `ssFJ!.modelode(dSdt, S, p, t)`
 and should implement:
 - `get_state(ssFJ!) -> inner_state`: record any state additional to that defined by ODE state variables (eg state variables for short lived species)
-- `set_step!(ssFJ!, tss, deltat, previous_state, inner_state)`: set to calculate residual for an implicit timestep `deltat` to `tss` 
-  from `previous_state`, optionally using `inner_state` to configure solver for DAE algebraic variables.
+- `set_step!(ssFJ!, t+Δt, Δt, S(t), inner_state)`: reset `ssFJ!` and hence `nldf` to calculate the residual `f(S_new)` for an implicit timestep 
+`Δt` to `t+Δt` from previous state `S(t)`, optionally using `inner_state` to eg configure an internal solver for DAE algebraic variables.
 
-The `nldf` function object should adapt `ssFJ!` to the `NLsolve` interface.
 """
 function solve_ptc(
     run, initial_state, @nospecialize(nlsolveF), tspan, deltat_initial::Float64;
