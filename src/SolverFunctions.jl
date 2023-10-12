@@ -13,11 +13,60 @@ import LinearAlgebra
 import SparseArrays
 import ForwardDiff
 import SparseDiffTools
+import MultiFloats
+import Sparspak
 
 # import Infiltrator # Julia debugger
 
 """
-    ca! = ClampAll!(minvalue, maxvalue)
+    StepClampMultAll!(minvalue, maxvalue, minmult, maxmult) -> scma!
+    StepClampMultAll!(minvalue, maxvalue, maxratio) = StepClampMultAll!(minvalue, maxvalue, 1.0/maxratio, maxratio)
+    scma!(x, x_old, newton_step)
+
+Function object to take Newton step `x .= x_old .+ newton_step` and then clamp all values in Vector `x` to specified range using:
+- `clamp!(x, x_old*minmult, x_old*maxmult)`
+- `clamp!(x, minvalue, maxvalue)`
+"""
+struct StepClampMultAll!
+    minvalue::Float64
+    maxvalue::Float64
+    minmult::Float64
+    maxmult::Float64
+end
+
+StepClampMultAll!(minvalue, maxvalue, maxratio) = StepClampMultAll!(minvalue, maxvalue, 1.0/maxratio, maxratio)
+
+function (scma::StepClampMultAll!)(x, x_old, newton_step)
+    for i in eachindex(x)
+        x[i] = x_old[i] + newton_step[i]
+        x[i] = clamp(x[i], x_old[i]*scma.minmult, x_old[i]*scma.maxmult)
+        x[i] = clamp(x[i], scma.minvalue, scma.maxvalue)
+    end
+    return nothing
+end
+
+"""
+    StepClampAll!(minvalue, maxvalue) -> sca!
+    sca!(x, x_old, newton_step)
+
+Function object to take Newton step `x .= x_old .+ newton_step` and then clamp all values in Vector `x` to specified range using
+`clamp!(x, minvalue, maxvalue)`
+"""
+struct StepClampAll!
+    minvalue::Float64
+    maxvalue::Float64
+end
+
+function (sca::StepClampAll!)(x, x_old, newton_step)
+    for i in eachindex(x)
+        x[i] = x_old[i] + newton_step[i]
+        x[i] = clamp(x[i], scma.minvalue, scma.maxvalue)
+    end
+    return nothing
+end
+
+"""
+    ClampAll!(minvalue, maxvalue) -> ca!
     ca!(v)
 
 Function object to clamp all values in Vector `v` to specified range using
@@ -43,6 +92,103 @@ struct ClampAll
 end
 
 (ca::ClampAll)(v) = clamp.(v, ca.minvalue, ca.maxvalue)
+
+"""
+    SparseLinsolveUMFPACK() -> slsu
+    slsu(x, A, b)
+
+Create solver function object to solve sparse A x = b using UMFPACK lu factorization
+
+Reenables iterative refinement (switched off by default by Julia lu)
+"""
+mutable struct SparseLinsolveUMFPACK
+    umfpack_control::Vector{Float64}
+    lu
+
+    function SparseLinsolveUMFPACK()
+        umfpack_control = SparseArrays.UMFPACK.get_umfpack_control(Float64, Int64)
+        # SparseArrays.UMFPACK.show_umf_ctrl(umfpack_control)
+        umfpack_control[SparseArrays.UMFPACK.JL_UMFPACK_IRSTEP] = 2.0 # reenable iterative refinement
+
+        return new(umfpack_control, nothing)
+    end
+end
+
+function (slsu::SparseLinsolveUMFPACK)(x, A, b)
+    if isnothing(slsu.lu)
+        slsu.lu = LinearAlgebra.lu(A; control=slsu.umfpack_control)
+    else
+        LinearAlgebra.lu!(slsu.lu, A; reuse_symbolic=true)
+    end
+
+    x .= slsu.lu \ b
+
+    return nothing
+end
+
+"""
+    SparseLinsolveSparspak64x2(; verbose=false) -> slsp
+    slsp(x, A, b)
+
+Create solver function object to solve sparse A x = b using Sparspak lu factorization at quad precision
+
+Includes one step of iterative refinement
+"""
+mutable struct SparseLinsolveSparspak64x2
+    A_mf::Union{Nothing, SparseArrays.SparseMatrixCSC{MultiFloats.MultiFloat{Float64, 2}, Int64}}
+    A_mf_lu
+    verbose::Bool
+
+    function SparseLinsolveSparspak64x2(; verbose=false)
+        return new(nothing, nothing, verbose)
+    end
+end
+
+function (slsp::SparseLinsolveSparspak64x2)(x::Vector, A::SparseArrays.SparseMatrixCSC, b::Vector)
+
+    if isnothing(slsp.A_mf) 
+        # Julia bug - type conversion squeezes out structural nonzeros !?
+        # slsp.A_mf = MultiFloats.Float64x2.(A)
+        # workaround - convert type by hand, preserving structural nonzeros
+        slsp.A_mf = SparseArrays.SparseMatrixCSC(size(A, 1), size(A, 2), A.colptr, A.rowval, MultiFloats.Float64x2.(A.nzval))
+        slsp.A_mf_lu = Sparspak.sparspaklu(slsp.A_mf)
+    else
+        size(A) == size(slsp.A_mf) || error("size of A has changed")
+        ((A.colptr == slsp.A_mf.colptr) && (A.rowval == slsp.A_mf.rowval)) || error("sparsity pattern of A has changed")
+        slsp.A_mf.nzval .= MultiFloats.Float64x2.(A.nzval)
+        newlu = Sparspak.sparspaklu!(slsp.A_mf_lu, slsp.A_mf) # reuse ordering and symbolic factorization
+        newlu === slsp.A_mf_lu || error("Sparspak.sparspaklu! has not reused lu !!!")
+    end
+  
+    # Solve with iterative refinement at Float64x4 precision
+    # (high precision is not really needed as x is only returned as a Float64, but 
+    # iterative refinement *is* needed to avoid strange numerical noise patterns in solution - bug in Sparspak or MultiFloats?)
+    b_mf = MultiFloats.Float64x2.(b)
+    x_mf4_1 = MultiFloats.Float64x4.(slsp.A_mf_lu \ b_mf)
+
+    r_mf4_1 = b - A*x_mf4_1
+    c_mf4_1 = MultiFloats.Float64x4.(slsp.A_mf_lu \ MultiFloats.Float64x2.(r_mf4_1))
+    x_mf4_2 = x_mf4_1 + c_mf4_1
+  
+    if slsp.verbose
+        r_mf4_2 = b - A*x_mf4_2
+
+        norm2_1 = LinearAlgebra.norm(r_mf4_1)
+        norminf_1 = LinearAlgebra.norm(r_mf4_1, Inf)
+
+        norm2_2 = LinearAlgebra.norm(r_mf4_2)
+        norminf_2 = LinearAlgebra.norm(r_mf4_2, Inf)
+
+        @info """\n
+        SparseLinsolveSparspak64x2      norm2=$norm2_1, norminf=$norminf_1
+        SparseLinsolveSparspak64x2 ir 1 norm2=$norm2_2, norminf=$norminf_2
+        """
+    end
+    
+    x .= Float64.(x_mf4_2)
+  
+    return nothing
+end
 
 """
     ModelODE(
