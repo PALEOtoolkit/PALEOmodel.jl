@@ -812,6 +812,7 @@ function save_netcdf(
     # Fails with variables with missing values eg that are  Union{Missing, Float64}
     # appears to be a NCDatasets.jl limitation (at least in v0.12.17) - the logic to map these to netcdf is 
     # combined with that to write the data, and the alternate form with just the type fails
+    # TODO may not work with NCDatasets v0.13 and later due to variable indexing changes ?
     define_all_first = false 
     # define_all_first = true
 
@@ -896,6 +897,7 @@ function save_netcdf(
 
             # write data (only used if define_all_first==true)
             for (nc_v, nc_vdata) in nc_all_vdata
+                # TODO may not work with NCDatasets v0.13 and later ?
                 nc_v[:] = nc_vdata
             end
         end
@@ -1235,7 +1237,15 @@ end
 function subdomain_to_netcdf!(ds, name::AbstractString, subdom::PB.Grids.InteriorSubdomain)
     NCDatasets.defDim(ds, "subdomain_"*name, length(subdom.indices))
 
-    v = NCDatasets.defVar(ds, "subdomain_"*name, subdom.indices .- 1, ("subdomain_"*name,)) # convert to zero based
+    # v = NCDatasets.defVar(ds, "subdomain_"*name, subdom.indices .- 1, ("subdomain_"*name,)) # convert to zero based
+
+    # workaround for issue in NCDatasets v0.14 (and probably in v0.13 as well)
+    # https://github.com/Alexander-Barth/NCDatasets.jl/issues/246
+    # "v0.14 cannot create variable from an Int64 array with missing values"
+
+
+    si32_zerobased = [ismissing(i) ? missing : Int32(i-1) for i in subdom.indices]
+    v = NCDatasets.defVar(ds, "subdomain_"*name, si32_zerobased, ("subdomain_"*name,)) # convert to zero based
     v.attrib["subdomain_type"] = "InteriorSubdomain"
 end
 
@@ -1246,9 +1256,9 @@ function netcdf_to_subdomains(dsvars)
         if haskey(v.attrib, "subdomain_type")
             subdomain_type = v.attrib["subdomain_type"]
             if subdomain_type == "BoundarySubdomain"
-                subdom = PB.Grids.BoundarySubdomain(v[:])
+                subdom = PB.Grids.BoundarySubdomain(Array(v))
             elseif subdomain_type == "InteriorSubdomain"
-                subdom = PB.Grids.InteriorSubdomain(v[:])
+                subdom = PB.Grids.InteriorSubdomain(Array(v))
             else
                 error("invalid subdomain_type = $subdomain_type")
             end
