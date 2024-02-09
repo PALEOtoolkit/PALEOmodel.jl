@@ -953,7 +953,7 @@ function load_netcdf!(output::OutputMemory, filename; check_ext=true)
                     var = dsgvars[dd_coord_name]
                     attributes = netcdf_to_attributes(var)
                     !(coords_record in NCDatasets.dimnames(var)) || error("data_dim coord variable $dd_coord_name is not constant! (has a $coords_record dimension)")
-                    push!(dd_coords, PB.FixedCoord(dd_coord_name, var[:], attributes))
+                    push!(dd_coords, PB.FixedCoord(dd_coord_name, Array(var), attributes))
                 end
                 push!(data_dims, PB.NamedDimension(ddn, dds, dd_coords))
             end
@@ -1065,7 +1065,7 @@ function netcdf_to_variable(
     space = attributes[:space]
     data_dims = attributes[:data_dims]
 
-    vdata = var[:] # convert to Julia Array
+    vdata = Array(var) # convert to Julia Array
 
     vdata = netcdf_to_field_data(vdata, field_data)
     
@@ -1435,8 +1435,8 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.
 
     # convert contiguous ragged array representation
     # back to vector-of-vectors 
-    cells_in_column = dsvars["cells_in_column"][:] # number of cells in each column
-    Icolumns_indices = dsvars["Icolumns"][:] .+ 1  # netcdf is zero based
+    cells_in_column = Array(dsvars["cells_in_column"]) # number of cells in each column
+    Icolumns_indices = Array(dsvars["Icolumns"]) .+ 1  # netcdf is zero based
     Icolumns = Vector{Vector{Int}}()
     colstart = 1
     for cells_this_column in cells_in_column
@@ -1450,12 +1450,12 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.
         var = dsvars[z_coord_name]
         attributes = netcdf_to_attributes(var)
         !("records" in NCDatasets.dimnames(var)) || error("z_coord variable $z_coord_name is not constant! (has a records dimension)")
-        push!(z_coords, PB.FixedCoord(z_coord_name, var[:], attributes))
+        push!(z_coords, PB.FixedCoord(z_coord_name, Array(var), attributes))
     end
   
     # optional column labels
     if haskey(dsvars, "columnnames")
-        columnnames = Symbol.(dsvars["columnnames"][:])
+        columnnames = Symbol.(Array(dsvars["columnnames"]))
     else
         columnnames = Symbol[]
     end
@@ -1484,7 +1484,7 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dat
         push!(dims, ds.dim[dimname])
         if haskey(dsvars, dimname)
             dimvar = dsvars[dimname]
-            push!(coords, dimvar[:])
+            push!(coords, Array(dimvar))
             axis = get(dimvar.attrib, "axis", nothing)
             if axis == "X"
                 global londim = i
@@ -1503,7 +1503,7 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dat
     isempty(coords_edges) || (length(coords_edges) == length(dimnames)) || error("spatial coordinates edges present but not on all dimensions")
      
     # convert back to linear vectors
-    linear_index = dsvars["linear_index"][:] .+ 1 # netcdf zero based
+    linear_index = Array(dsvars["linear_index"]) .+ 1 # netcdf zero based
     # reconstruct cartesian index 
     cartesian_index = Vector{CartesianIndex{length(dims)}}()
     lin_cart_index = Int[]
