@@ -60,7 +60,7 @@ end
 function (sca::StepClampAll!)(x, x_old, newton_step)
     for i in eachindex(x)
         x[i] = x_old[i] + newton_step[i]
-        x[i] = clamp(x[i], scma.minvalue, scma.maxvalue)
+        x[i] = clamp(x[i], sca.minvalue, sca.maxvalue)
     end
     return nothing
 end
