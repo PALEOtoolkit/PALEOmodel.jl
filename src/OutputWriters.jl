@@ -1237,15 +1237,11 @@ end
 function subdomain_to_netcdf!(ds, name::AbstractString, subdom::PB.Grids.InteriorSubdomain)
     NCDatasets.defDim(ds, "subdomain_"*name, length(subdom.indices))
 
-    # v = NCDatasets.defVar(ds, "subdomain_"*name, subdom.indices .- 1, ("subdomain_"*name,)) # convert to zero based
-
-    # workaround for issue in NCDatasets v0.14 (and probably in v0.13 as well)
+    # NB: issue in NCDatasets v0.13 (probably) - v0.14.1 causes failure, fixed in v0.14.2 
     # https://github.com/Alexander-Barth/NCDatasets.jl/issues/246
     # "v0.14 cannot create variable from an Int64 array with missing values"
 
-
-    si32_zerobased = [ismissing(i) ? missing : Int32(i-1) for i in subdom.indices]
-    v = NCDatasets.defVar(ds, "subdomain_"*name, si32_zerobased, ("subdomain_"*name,)) # convert to zero based
+    v = NCDatasets.defVar(ds, "subdomain_"*name, subdom.indices .- 1, ("subdomain_"*name,)) # convert to zero based
     v.attrib["subdomain_type"] = "InteriorSubdomain"
 end
 
