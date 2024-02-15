@@ -543,19 +543,26 @@ function print_sol_stats end
 
 function print_sol_stats(sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution})
 
+    io_stats = IOBuffer()
+    try
+        show(io_stats, "text/plain", sol.stats)
+    catch
+        @warn "Could not get sol.stats"
+    end
+
     @info """
     
     ================================================================================
     print_sol_stats:
         retcode=$(sol.retcode)
-        nsteps $(length(sol.t))
-
         alg=$(sol.alg)
-        $(sol.destats)
+        stats=$(String(take!(io_stats)))
         length(sol.t) $(length(sol.t))
         size(sol) $(size(sol))
     ================================================================================
     """
+
+   
 
     return nothing
 end
