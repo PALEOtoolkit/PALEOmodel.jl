@@ -78,7 +78,8 @@ function steadystate(
     # check for implicit total variables
     iszero(PALEOmodel.num_total(sv)) || error("implicit total variables, not in constant mass matrix DAE form")
    
-    iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+    # iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+    @info "$(PALEOmodel.num_algebraic_constraints(sv)) algebraic constraints"
 
     # calculate residual F = dS/dt
     ssf! = SolverFunctions.ModelODE_at_t(modeldata)
@@ -699,7 +700,7 @@ function solve_ptc(
     # first entry is initial state
     @info "    writing output record at initial time tmodel = $(tss_initial)"
     iout = 1                            # tss_output_filtered[iout] is model time of next record to output
-    tsoln = [tss_initial]                       # output vector of pseudo-times
+    tsoln = Float64[tss_initial]                       # output vector of pseudo-times
     soln = [copy(initial_state)]        # output vector of state vectors at each pseudo-time
     # Always write initial state as first entry (whether requested or not)
     if !isempty(tss_output_filtered) && (tss_output_filtered[1] == tss_initial)
@@ -877,8 +878,12 @@ Given:
 
 Calculates `F(u)` and `J(u)` (Jacobian of `F`), where `F(u)` is the residual for a timestep `delta_t` to time `t`
 from state `previous_u`:
-- `F(u) = (u(t) - previous_u + delta_t * du(t)/dt)`
-- `J(u) = I - deltat * d(du(t)/dt)/du`
+- If `u_i` is an ODE variable, this is:
+  - `F(u_i) = (u_i(t) - previous_u_i + delta_t * du_i(t)/dt)`
+  - `J(u_i) = I - deltat * d(du_i(t)/dt)/du`
+- If `u_i` is an algebraic constraint (from a DAE), this is:
+  - `F(u_i) = du_i(t)/dt`
+  - `J(u_i) = d(du_i(t)/dt)/du`
 """
 struct FJacPTC
     modelode #::M no specialization to minimise recompilation
@@ -887,6 +892,7 @@ struct FJacPTC
     delta_t::Base.RefValue{Float64}
     previous_u::Vector{Float64}
     du_worksp::Vector{Float64}
+    var_is_differential::Vector{Bool}
 end
 
 """
@@ -922,7 +928,13 @@ function (jn::FJacPTC)(F, J::Union{SparseArrays.SparseMatrixCSC, Nothing}, u)
     jn.modelode(jn.du_worksp, u, nothing, jn.t[])
 
     if !isnothing(F)
-        F .=  ((u .- jn.previous_u) .- jn.delta_t[].*jn.du_worksp)
+        for i in 1:length(u)
+            if jn.var_is_differential[i]
+                F[i] =  ((u[i] - jn.previous_u[i]) - jn.delta_t[]*jn.du_worksp[i])
+            else
+                F[i] = jn.du_worksp[i]
+            end
+        end
     end
 
     if !isnothing(J)
@@ -934,11 +946,15 @@ function (jn::FJacPTC)(F, J::Union{SparseArrays.SparseMatrixCSC, Nothing}, u)
             for idx in J.colptr[j]:(J.colptr[j+1]-1)
                 i = J.rowval[idx]
 
-                J.nzval[idx] = -jn.delta_t[]*J.nzval[idx]                
+                if jn.var_is_differential[i]
+                    J.nzval[idx] = -jn.delta_t[]*J.nzval[idx]                
 
-                if i == j
-                    J.nzval[idx] += 1.0
-                end                
+                    if i == j
+                        J.nzval[idx] += 1.0
+                    end
+                else
+                    # unmodified ODE Jacobian
+                end  
             end
         end
     end
@@ -976,7 +992,7 @@ function nlsolveF_PTC(
 
     # We only support explicit ODE-like configurations (no DAE constraints or implicit variables)
     iszero(PALEOmodel.num_total(sv))                 || error("implicit total variables not supported")
-    iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
+    # iszero(PALEOmodel.num_algebraic_constraints(sv)) || error("algebraic constraints not supported")
 
     # previous_u is state at previous timestep
     previous_u = similar(initial_state)
@@ -988,14 +1004,15 @@ function nlsolveF_PTC(
     deltat = Ref(NaN)
 
     modelode = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
+    var_is_differential = PALEOmodel.state_vars_isdifferential(modeldata.solver_view_all)
 
     if jac_ad==:NoJacobian
-        @info "nlsolveF_PTC: no Jacobian"
+        @info "nlsolveF_PTC: no Jacobian, $(PALEOmodel.num_algebraic_constraints(sv)) algebraic constraints"
         # Define the function we want to solve 
-        ssFJ! = FJacPTC(modelode, nothing, tss, deltat, nothing, nothing, previous_u, du_worksp)
+        ssFJ! = FJacPTC(modelode, nothing, tss, deltat, nothing, nothing, previous_u, du_worksp, var_is_differential)
         nldf = NLsolve.OnceDifferentiable(ssFJ!, similar(initial_state), similar(initial_state)) 
     else       
-        @info "nlsolveF_PTC:  using Jacobian $jac_ad"
+        @info "nlsolveF_PTC:  using Jacobian $jac_ad, $(PALEOmodel.num_algebraic_constraints(sv)) algebraic constraints"
         jacode, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
             jac_ad, model, initial_state, modeldata, tss_jac_sparsity;
             request_adchunksize,
@@ -1003,7 +1020,7 @@ function nlsolveF_PTC(
             generated_dispatch,
         )
        
-        ssFJ! = FJacPTC(modelode, jacode, tss, deltat, previous_u, du_worksp)
+        ssFJ! = FJacPTC(modelode, jacode, tss, deltat, previous_u, du_worksp, var_is_differential)
  
         # Define the function + Jacobian we want to solve
         !isnothing(jac_prototype) || error("Jacobian is not sparse")
