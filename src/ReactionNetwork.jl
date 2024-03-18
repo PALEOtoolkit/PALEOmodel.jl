@@ -290,7 +290,7 @@ optionally selecting species to print.
 
 # Example
 
-    ratesummaries = PALEOmodel.ReactionNetwork.get_all_species_ratesummaries(model, output, "atm")
+    ratesummaries = PALEOmodel.ReactionNetwork.get_all_species_ratesummaries(output, "atm")
     PALEOmodel.ReactionNetwork.show_ratesummaries(ratesummaries)
 
 """
@@ -315,7 +315,7 @@ function show_ratesummaries(io::IO, ratesummaries; select_species=[])
     return nothing
 end
 
-show_ratesummaries(ratesummaries; kwargs...) = show_ratesummaries(stdout; kwargs...)
+show_ratesummaries(ratesummaries; kwargs...) = show_ratesummaries(stdout, ratesummaries; kwargs...)
 
 function __init__()
     # If PyCall is available, include additional functions using Python pydot.
