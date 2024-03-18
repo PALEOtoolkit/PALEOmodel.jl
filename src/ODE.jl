@@ -246,9 +246,14 @@ Provides a wrapper around the Julia SciML [DifferentialEquations](https://github
 package DAE solvers, with PALEO-specific additional setup. Keyword arguments `alg` and `solvekwargs` are passed through to the
 `DifferentialEquations` `solve` method.
 
-`integrateDAEForwardDiff` sets keyword arguments `jac_ad=:ForwardDiffSparse`, `alg=Sundials.CVODE_BDF(linear_solver=:KLU)`
+`integrateDAEForwardDiff` sets keyword arguments `jac_ad=:ForwardDiffSparse`, `alg=Sundials.IDA(linear_solver=:KLU)`
 to use the Julia [ForwardDiff](https://github.com/JuliaDiff/ForwardDiff.jl) package to provide the Jacobian with
 forward-mode automatic differentiation and automatic sparsity detection.
+
+# Limitations
+- arbitrary combinations of implicit `total` (`T`) and algebraic `constraint` (`C`) variables are not supported by Sundials IDA 
+as used here, as the IDA solver option used to find consistent initial conditions requires a partioning 
+into differential and algebraic variables (see `SolverView` documentation).
 
 # Implementation
 Follows the SciML standard pattern:
@@ -277,6 +282,9 @@ function integrateDAE(
 )
     LinearAlgebra.BLAS.set_num_threads(BLAS_num_threads)
 
+    num_total = PALEOmodel.num_total(modeldata.solver_view_all)
+    num_constraint = PALEOmodel.num_algebraic_constraints(modeldata.solver_view_all)
+
     @info """
 
     ================================================================================
@@ -288,6 +296,12 @@ function integrateDAE(
     ================================================================================
     """
     
+    if !iszero(num_total) && !iszero(num_constraint)
+        @warn "arbitrary combinations of total $num_total and constraint $num_constraint variables are not supported: see 'SolverView' documentation,"*
+            " eg IDA initialisation requires that 'total' variables are not functions of 'constraint' variables"*
+            " so that a partitioning into differential and algebraic variables is possible (this is not checked here)"
+    end
+
     func = DAEfunction(
         run.model, modeldata;   
         jac_ad,
@@ -298,7 +312,7 @@ function integrateDAE(
    
     differential_vars = PALEOmodel.state_vars_isdifferential(modeldata.solver_view_all)
 
-    # create inconsistent initial conditions for DAE variables, rely on DAE solver to find them
+    @info "calling get_inconsistent_initial_deriv"
     initial_deriv = get_inconsistent_initial_deriv(
         initial_state, modeldata, tspan[1], differential_vars, func.f
     )
@@ -372,8 +386,16 @@ end
         initial_state, modeldata, initial_t, differential_vars, modeldae::SolverFunctions.ModelDAE
     ) -> initial_deriv
 
-Create (inconsistent) `initial_deriv` for a DAE problem: ODE variables are consistent, DAE variables set to zero 
-ie rely on DAE solver to find them
+NB: IDA initialisation seems not fully understood: with Julia Sundials.IDA(init_all=false)
+(the Sundials.jl default) corresponding to the IDA option `IDA_YA_YDP_INIT` to `IDACalcIC()`,
+this should "direct IDACalcIC() to compute the algebraic components of y and differential components of ydot, 
+given the differential components of y."
+But it seems to have some sensitivity to `initial_deriv` (ydot), which shouldn't be used according to the above ?
+
+This function takes a guess at what is needed for `initial_deriv`:
+- initial_deriv for ODE variables will now be consistent
+- set initial_deriv (constraint for algebraic variables) = 0, this will not be satisfied (ie will not be consistent)
+- initial_deriv for implicit variables will not be consistent
 """
 function get_inconsistent_initial_deriv(
     initial_state, modeldata, initial_t, differential_vars, modeldae::SolverFunctions.ModelDAE
@@ -382,50 +404,12 @@ function get_inconsistent_initial_deriv(
     initial_deriv = similar(initial_state)
     
     # Evaluate initial derivative
-    # ODE variables will now be consistent, constraint for algebraic variables will not be satisfied 
-    # implicit variables will be fixed up below
+    # ODE variable derivative will now be consistent
+    # implicit (Total) derivative will not be consistent
     m = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
     m(initial_deriv, initial_state , nothing, initial_t)
 
-    # Find consistent initial conditions for implicit variables (if any)
-    if PALEOmodel.num_total(modeldata.solver_view_all) > 0
-        # TODO this finds ds/dt, but doesn't yet solve for State s given Total 
-        # (currently will set Total initial conditions from s, which is usually not what is wanted)
-        @warn "Calculating Total variables initial conditions from State variables (calculation of State from Total not implemented)"
-
-        l_ts = length(modeldata.solver_view_all.stateexplicit)
-        l_ti = length(modeldata.solver_view_all.total)
-
-        # Find consistent initial conditions for ds/dt
-        # get dU/dS
-        odeimplicit = modeldae.odeimplicit
-        odeimplicit(odeimplicit.duds, initial_state, nothing, initial_t)
-        # take slice to include only implicit variables (will be a square matrix)
-        duds_imponly = odeimplicit.duds[:, (l_ts+1):(l_ts+l_ti)]
-        # construct duds without these entries
-        duds_noimp = copy(odeimplicit.duds)       
-        duds_noimp[:, (l_ts+1):(l_ts+l_ti)] -= duds_imponly
-        # solve for ds that gives zero residuals
-        # resid = 0 = -duds*ds + initial_deriv(s)
-        #           = -duds_imponly*ds -duds_noimp*initial_deriv(s) + initial_deriv(s)
-        # duds_imponly * ds = (initial_deriv(s) -duds_noimp*ds)[iistrt::iiend]
-        rhs = initial_deriv[(l_ts+1):(l_ts+l_ti)] - duds_noimp*initial_deriv
-        ds = duds_imponly \ rhs
-
-        # check 
-        resid = similar(initial_deriv)
-        modeldae(resid, initial_deriv, initial_state, nothing, initial_t)
-        total_resid_norm_initial = LinearAlgebra.norm(resid[(l_ts+1):(l_ts+l_ti)])
-
-        initial_deriv[(l_ts+1):(l_ts+l_ti)] .= ds
-
-        # check 
-        modeldae(resid, initial_deriv, initial_state, nothing, initial_t)
-        total_resid_norm_solve = LinearAlgebra.norm(resid[(l_ts+1):(l_ts+l_ti)])
-        @info "  Total Variables residual norm $total_resid_norm_initial -> $total_resid_norm_solve"
-    end
-
-    # Set initial_deriv to zero for algebraic variables (so these will be inconsistent)
+    # Set initial_deriv (ie constraint) for algebraic variables - shouldn't matter according to IDA doc ?
     for i=1:length(initial_deriv)       
         if !differential_vars[i]
             initial_deriv[i] = 0.0
