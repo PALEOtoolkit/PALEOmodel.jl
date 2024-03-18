@@ -4,18 +4,36 @@
 
 Provides a view on the whole or some part of the Model for a numerical solver.
 
-Contains `PALEOboxes.VariableAggregator`s for a subset of spatial locations  
-(Domains, indices within spatial Domains) and Variables, with:
-    - ODE paired `stateexplicit` (S) and `stateexplicit_deriv` (dS/dt), where dS/dt = F(S).
-    - Implicit-ODE paired `total` (T) and `total_deriv` (dT/dt), where dT(S)/dt = F(T(S)) with
-        `total` a function of explicit and implicit state Variables `statexplicit` and `state` (S).
-    - Algebraic `constraint`s (C), where C(S) = 0 with C a function of explicit and implicit state Variables `statexplicit` and `state` (S),
-    
-The number of `total` + number of `constraint` Variables must equal the number of implicit `state` Variables.
-    
+Contains `PALEOboxes.VariableAggregator`s for a subset of spatial locations, defining state variables
+`S_all` composed of subsets `stateexplicit` (`S_e`), `statetotal` (`S_t`) and `state` (`S_a`).
+
+Differential and algebraic constraints are provided by:
+
+- ODE paired `stateexplicit` (`S_e`) and `stateexplicit_deriv` (`dS_e/dt`), where `dS_e/dt = F(S_all)`.
+- Implicit-ODE paired `total` (`T`) and `total_deriv` (`dT/dt`), where `dT(S_all)/dt = F(S_all)`,   
+  This implicitly determines the time derivative `dS_t/dt`, as `dT(S_all)/dt = dT(S_all)/dS_all * dS_all/dt`.
+  The number of `total` (`T`) variables must equal the number of `statetotal` variables `S_t`.
+- Algebraic `constraint`s (`C`), where `C(S_all) = 0` and the number of `constraint` Variables `C` must 
+  equal the number of `state` variables `S_a`.
+
+If there are either no `total` (`T`) variables, or they are functions `T(S_e, S_t)` only of `S_e` and `S_t` (not of `S_a`), then 
+the state variables can be partitioned into subsets of differential variables `S_d` (consisting of `stateexplicit` (`S_e`) and `statetotal` (`S_t`)),
+and algebraic variables `state` (`S_a`).
+
+The available choice of numerical solvers depends on the types of state variables in the model configuration:
+- A system with only `stateexplicit` (`S_e`) variables can be solved by an ODE solver
+  (eg as a SciML `ODEProblem` by `PALEOmodel.ODE.integrate`).
+- Some ODE solvers (those that support a constant mass matrix on the LHS) can also solve systems with constraints `C`
+  (eg as a SciML `ODEProblem` by `PALEOmodel.ODE.integrate`).
+- A DAE solver such as Sundials IDA is required to solve systems with implicit `total` (`T`) variables 
+  (eg as a SciML `DAEProblem` by `PALEOmodel.ODE.integrateDAE`).
+  NB: arbitrary combinations of `total` (`T`) and `constraint` (`C`) variables are *not* supported by Sundials IDA
+  via `PALEOmodel.ODE.integrateDAE`, as the IDA solver option used to find consistent initial conditions requires a partioning 
+  into differential and algebraic variables as described above.
+
 Optional access methods provide an `ODE/DAE solver` view with composite `statevar` and `statevar_sms`,where:
     
-    - `statevar` is a concatenation of `stateexplicit` and `state` ([`set_statevar!`](@ref))
+    - `statevar` is a concatenation of `stateexplicit`, `statetotal`, and `state` ([`set_statevar!`](@ref))
     - `statevar_sms` is a concatenation of `stateexplicit_deriv`, `total_deriv`, `constraints` ([`get_statevar_sms!`](@ref))
 
 Constructors create a [`SolverView`](@ref) for the entire model from `modeldata` array set `arrays_idx`, 
@@ -30,8 +48,9 @@ AD types.
 """
 mutable struct SolverView{
     T, 
-    VA1 <: PB.VariableAggregator, VA2 <: PB.VariableAggregator, VA3 <: PB.VariableAggregator, VA4 <: PB.VariableAggregator, VA5 <: PB.VariableAggregator, VA6 <: PB.VariableAggregator,
-    VA7 <: PB.VariableAggregatorNamed
+    VA1 <: PB.VariableAggregator, VA2 <: PB.VariableAggregator, VA3 <: PB.VariableAggregator, VA4 <: PB.VariableAggregator,
+    VA5 <: PB.VariableAggregator, VA6 <: PB.VariableAggregator, VA7 <: PB.VariableAggregator,
+    VA8 <: PB.VariableAggregatorNamed
 }
     stateexplicit::VA1
     stateexplicit_deriv::VA2
@@ -44,16 +63,19 @@ mutable struct SolverView{
     constraints::VA5
     constraints_norm::Vector{Float64}
 
-    state::VA6
+    statetotal::VA6
+    statetotal_norm::Vector{Float64}
+
+    state::VA7
     state_norm::Vector{Float64}
 
-    hostdep::VA7
+    hostdep::VA8
 
     function SolverView(
         etype::Type{T};  # eltype(modeldata, arrays_idx)
-        stateexplicit::A1, stateexplicit_deriv::A2, total::A3, total_deriv::A4, constraints::A5, state::A6, hostdep::A7
-    ) where {T, A1, A2, A3, A4, A5, A6, A7}
-        return new{T, A1, A2, A3, A4, A5, A6, A7}(
+        stateexplicit::A1, stateexplicit_deriv::A2, total::A3, total_deriv::A4, constraints::A5, statetotal::A6, state::A7, hostdep::A8
+    ) where {T, A1, A2, A3, A4, A5, A6, A7, A8}
+        return new{T, A1, A2, A3, A4, A5, A6, A7, A8}(
             stateexplicit,
             stateexplicit_deriv,
             Vector{Float64}(),
@@ -62,6 +84,8 @@ mutable struct SolverView{
             Vector{Float64}(),
             constraints,
             Vector{Float64}(),
+            statetotal,
+            Vector{Float64}(),
             state,
             Vector{Float64}(),
             hostdep
@@ -69,7 +93,7 @@ mutable struct SolverView{
     end
 end
 
-Base.eltype(::Type{SolverView{T, A1, A2, A3, A4, A5, A6, A7}}) where {T, A1, A2, A3, A4, A5, A6, A7} = T
+Base.eltype(::Type{SolverView{T, A1, A2, A3, A4, A5, A6, A7, A8}}) where {T, A1, A2, A3, A4, A5, A6, A7, A8} = T
 
 "compact form"
 function Base.show(io::IO, sv::SolverView)
@@ -79,6 +103,7 @@ function Base.show(io::IO, sv::SolverView)
         "(stateexplicit $(length(sv.stateexplicit)), "*
         "total $(length(sv.total)), "*
         "constraints $(length(sv.constraints)), "*
+        "statetotal $(length(sv.statetotal)), "*
         "state $(length(sv.state)), "*
         "hostdep $(length(sv.hostdep)))"
     )
@@ -87,7 +112,7 @@ end
 "multiline form"
 function Base.show(io::IO, m::MIME"text/plain", sv::SolverView)
     println(io, "SolverView{$(eltype(sv)), ...}:")
-    for f in (:stateexplicit, :stateexplicit_deriv, :total, :total_deriv, :constraints, :state, :hostdep)
+    for f in (:stateexplicit, :stateexplicit_deriv, :total, :total_deriv, :constraints, :statetotal, :state, :hostdep)
         print(io, String(f)*":  ")
         va = getfield(sv, f)
         show(io, m, va)
@@ -109,11 +134,12 @@ end
 """
     set_statevar!(sv::SolverView, u)
 
-Set combined stateexplicit, state variables from u
+Set combined stateexplicit, statetotal, state variables from u
 """
 function set_statevar!(sv::SolverView, u::AbstractVector)
    
     l_ts = copyto!(sv.stateexplicit, u, sof=1)
+    l_ts += copyto!(sv.statetotal, u, sof=l_ts+1)
     copyto!(sv.state, u, sof=l_ts+1)      
    
     return nothing
@@ -124,13 +150,16 @@ function add_statevar!(sv::SolverView, a, u::AbstractVector)
    
     l_ts = length(sv.stateexplicit)   
     PB.add_data!(sv.stateexplicit, a, view(u, 1:l_ts))
-    PB.add_data!(sv.state, a, view(u, (l_ts+1):length(u)))      
+    l_ts2 = length(sv.statetotal)
+    PB.add_data!(sv.statetotal, a, view(u, (l_ts+1):(l_ts+l_ts2))) 
+    PB.add_data!(sv.state, a, view(u, (l_ts+l_ts2+1):length(u)))      
    
     return nothing
 end
 
 function get_statevar!(u, sv::SolverView)
     l_ts = copyto!(u, sv.stateexplicit, dof=1)
+    l_ts += copyto!(u, sv.statetotal, dof=1+l_ts)
     copyto!(u, sv.state, dof=1+l_ts)
     return nothing
 end
@@ -170,8 +199,11 @@ function get_statevar_sms(sv::SolverView)
 end
 
 function get_statevar(sv::SolverView)
-    return vcat(PB.get_data(sv.stateexplicit),
-                PB.get_data(sv.state))
+    return vcat(
+        PB.get_data(sv.stateexplicit),
+        PB.get_data(sv.statetotal),
+        PB.get_data(sv.state),
+    )
 end
 
 function PB.get_statevar(sv::SolverView) 
@@ -180,8 +212,11 @@ function PB.get_statevar(sv::SolverView)
 end
 
 function get_statevar_norm(sv::SolverView)
-    return vcat(sv.stateexplicit_norm,
-                sv.state_norm)
+    return vcat(
+        sv.stateexplicit_norm,
+        sv.statetotal_norm,
+        sv.state_norm,
+    )
 end
 
 function PB.get_statevar_norm(sv::SolverView) 
@@ -197,6 +232,7 @@ end
 "copy norm values from state variable etc data"
 function copy_norm!(sv::SolverView)
     sv.stateexplicit_norm   = PB.value_ad.(PB.get_data(sv.stateexplicit))
+    sv.statetotal_norm      = PB.value_ad.(PB.get_data(sv.statetotal))
     sv.state_norm           = PB.value_ad.(PB.get_data(sv.state))
     sv.total_norm           = PB.value_ad.(PB.get_data(sv.total))
     sv.constraints_norm     = PB.value_ad.(PB.get_data(sv.constraints))
@@ -206,6 +242,7 @@ end
 "copy norm values back into state variable etc data"
 function uncopy_norm!(sv::SolverView)
     copyto!(sv.stateexplicit, sv.stateexplicit_norm)
+    copyto!(sv.statetotal, sv.statetotal_norm)
     copyto!(sv.state, sv.state_norm)
     copyto!(sv.total, sv.total_norm)
     copyto!(sv.constraints, sv.constraints_norm)
@@ -249,6 +286,7 @@ function SolverView(
     stateexplicit, stateexplicit_deriv, stateexplicit_cr = PB.VariableDomain[], PB.VariableDomain[], []
     total, total_deriv, total_cr = PB.VariableDomain[], PB.VariableDomain[], []
     constraint, constraint_cr = PB.VariableDomain[], []
+    statetotal, statetotal_cr = PB.VariableDomain[], []
     state, state_cr = PB.VariableDomain[], []
     hostdep = PB.VariableDomain[]
 
@@ -260,6 +298,7 @@ function SolverView(
             (PB.VF_StateExplicit,  stateexplicit,  stateexplicit_cr,   stateexplicit_deriv,    "_sms"),
             (PB.VF_Total,          total,          total_cr,           total_deriv,            "_sms"),
             (PB.VF_Constraint,     constraint,     constraint_cr,      nothing,                ""),
+            (PB.VF_StateTotal,     statetotal,     statetotal_cr,      nothing,                ""),
             (PB.VF_State,          state,          state_cr,           nothing,                ""),
             (PB.VF_Undefined,      hostdep,        nothing,            nothing,                ""),
         ]
@@ -288,14 +327,14 @@ function SolverView(
         end
         push!(report, crreport)    
     end    
-    push!(report, ["Total", "-", length(stateexplicit), length(total), length(constraint), length(state), length(hostdep)])
+    push!(report, ["Total", "-", length(stateexplicit), length(total), length(constraint), length(statetotal), length(state), length(hostdep)])
 
-    n_state_vars = length(stateexplicit) + length(state)
+    n_state_vars = length(stateexplicit) + length(statetotal) + length(state)
     n_equations = length(stateexplicit) + length(total) + length(constraint)
 
     if verbose        
-        colnames = ["Domain", "operatorID", "VF_StateExplicit", "VF_Total", "VF_Constraint", "VF_State", "VF_Undefined"]
-        colwidths = [24,       12,          18,                 18,         18,              18,         18]
+        colnames = ["Domain", "operatorID", "VF_StateExplicit", "VF_Total", "VF_Constraint", "VF_StateTotal", "VF_State", "VF_Undefined"]
+        colwidths = [24,       12,          18,                 18,         18,              18,              18,         18]
         sep = rpad("", sum(colwidths), "-")
         println(io, "    host-dependent Variables:")
         println(io, "    ", sep)
@@ -306,7 +345,7 @@ function SolverView(
         end
         println(io, "    ", sep)
         println(io, "  n_state_vars $n_state_vars  (stateexplicit $(length(stateexplicit)) "*
-            "+ state $(length(state)))")
+            "+ statetotal $(length(statetotal)) + state $(length(state)))")
         println(io, "  n_equations $n_equations  (stateexplicit $(length(stateexplicit)) "*
             "+ total $(length(total)) + constraint $(length(constraint)))")             
     end
@@ -344,6 +383,7 @@ function SolverView(
         total = PB.VariableAggregator(total, total_cr, modeldata, arrays_idx),
         total_deriv = PB.VariableAggregator(total_deriv, total_cr, modeldata, arrays_idx),
         constraints = PB.VariableAggregator(constraint, constraint_cr, modeldata, arrays_idx),
+        statetotal = PB.VariableAggregator(statetotal, statetotal_cr, modeldata, arrays_idx),
         state = PB.VariableAggregator(state, state_cr, modeldata, arrays_idx),
         hostdep = PB.VariableAggregatorNamed(hostdep, modeldata, arrays_idx)
     )

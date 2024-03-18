@@ -253,12 +253,12 @@ function OutputMemoryDomain(
             by=var->var.name
         ),
         sort(
-            PB.get_variables(dom, v->PB.get_attribute(v, :vfunction, PB.VF_Undefined) in (PB.VF_State,)),
+            PB.get_variables(dom, v->PB.get_attribute(v, :vfunction, PB.VF_Undefined) in (PB.VF_State, PB.VF_StateTotal)),
             by=var->var.name
         ),
         sort(
             PB.get_variables(
-                dom, v-> !(PB.get_attribute(v, :vfunction, PB.VF_Undefined) in (PB.VF_StateExplicit, PB.VF_Total, PB.VF_Constraint, PB.VF_Deriv, PB.VF_State))),
+                dom, v-> !(PB.get_attribute(v, :vfunction, PB.VF_Undefined) in (PB.VF_StateExplicit, PB.VF_Total, PB.VF_StateTotal, PB.VF_Constraint, PB.VF_Deriv, PB.VF_State))),
             by=var->var.name
         ),
     )
@@ -1589,13 +1589,9 @@ function netcdf_to_attributes(v)
     known_attrib_to_typed = Dict(
         :space => v->parse(PB.AbstractSpace, last(split(v, "."))), # "PALEOboxes.CellSpace" fails, "CellSpace" works
         :field_data => v->parse(PB.AbstractData, v),
-        :data_dims => v->isa(v, Vector) ? Tuple(v) : (v,),  # stored as a vector but returned as a scalar if length 1
-        :operatorID => v->isa(v, Vector) ? v : [v], # stored as a vector but returned as a scalar if length 1
         :vfunction => v->parse(PB.VariableFunction, v),
         :vphase => v->parse(PB.VariablePhase, v),
         :datatype => v->isdefined(Base, Symbol(v)) ? getfield(Base, Symbol(v)) : v,  # look for a type eg Float64, fallback to String if not found
-        :rate_species => v->isa(v, Vector) ? v : [v], # stored as a vector but returned as a scalar if length 1
-        :rate_stoichiometry => v->isa(v, Vector) ? v : [v], # stored as a vector but returned as a scalar if length 1
     )
     # convert string value for other attributes (currently just bools)
     attrib_val_to_typed = Dict(
@@ -1605,13 +1601,18 @@ function netcdf_to_attributes(v)
 
     attributes = Dict{Symbol, Any}()
 
-    for (aname, avalstring) in v.attrib
+    for (aname, avalnc) in v.attrib
         anamesym = Symbol(aname)
-        # try known attribute then generic, then just leave as string
+        # try known attribute then generic, then guess boolean conversions, then just leave as string
         if haskey(known_attrib_to_typed, anamesym)
-            aval = known_attrib_to_typed[anamesym](avalstring)
+            aval = known_attrib_to_typed[anamesym](avalnc)
+        elseif PB.is_standard_attribute(anamesym) && PB.standard_attribute_type(anamesym) <: AbstractVector
+            aval = isa(avalnc, Vector) ? avalnc : [avalnc] # stored as a vector but returned as a scalar if length 1
+        elseif PB.is_standard_attribute(anamesym) && PB.standard_attribute_type(anamesym) <: Tuple
+            aval = isa(avalnc, Vector) ? Tuple(avalnc) : (avalnc, ) # stored as a vector but returned as a scalar if length 1
         else
-            aval = get(attrib_val_to_typed, avalstring, avalstring)
+            # guess at how to convert values
+            aval = get(attrib_val_to_typed, avalnc, avalnc)
         end
         attributes[anamesym] = aval
     end

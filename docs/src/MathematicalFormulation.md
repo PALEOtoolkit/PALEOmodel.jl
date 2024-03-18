@@ -22,7 +22,7 @@ State variables ``S_{impl}`` (a subset of all state variables ``S_{all}``) are d
 ```math
 \frac{dU(S_{all})}{dt} = F(U(S_{all}), t)
 ```
-where total variables ``U`` are identified by PALEO attribute `:vfunction = PALEOboxes.VF_Total` and paired time derivatives ``F`` by `:vfunction = PALEOboxes.VF_Deriv` along with the naming convention `<totalvarname>, <totalvarname>_sms`, and implicit state variables ``S_{impl}`` are identified by PALEO attribute `:vfunction = PALEOboxes.VF_State`.
+where total variables ``U`` are identified by PALEO attribute `:vfunction = PALEOboxes.VF_Total` and paired time derivatives ``F`` by `:vfunction = PALEOboxes.VF_Deriv` along with the naming convention `<totalvarname>, <totalvarname>_sms`, and implicit state variables ``S_{impl}`` are identified by PALEO attribute `:vfunction = PALEOboxes.VF_StateTotal`.
 
 
 
