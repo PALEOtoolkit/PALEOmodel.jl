@@ -28,16 +28,31 @@ integrateDAE
 
 ### Low level functions
 ```@meta
-CurrentModule = PALEOmodel.ODE
+CurrentModule = PALEOmodel
 ```
+
+ODE functions:
+
 ```@docs
-ODEfunction
+ODE.ODEfunction
 
-DAEfunction
-get_inconsistent_initial_deriv
+JacobianAD.jac_config_ode
+JacobianAD.paramjac_config_ode
+```
 
-print_sol_stats
-calc_output_sol!
+DAE functions:
+
+```@docs
+ODE.DAEfunction
+JacobianAD.jac_config_dae
+ODE.get_inconsistent_initial_deriv
+```
+
+Model solution:
+
+```@docs
+ODE.print_sol_stats
+ODE.calc_output_sol!
 ```
 
 ## Steady-state solvers (Julia [`NLsolve`](https://github.com/JuliaNLSolvers/NLsolve.jl) based)

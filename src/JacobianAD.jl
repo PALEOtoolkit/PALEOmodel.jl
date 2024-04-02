@@ -35,7 +35,7 @@ import TimerOutputs: @timeit, @timeit_debug
     jac_config_ode(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity;
         kwargs...
-    )-> (jac, jac_prototype::SparseMatrixCSC)
+    )-> (jac, jac_prototype::Union{Nothing, SparseMatrixCSC})
 
 Create and return `jac` (ODE Jacobian function object), and `jac_prototype` (sparsity pattern as `SparseMatrixCSC`, or `nothing` for dense Jacobian)
 
@@ -49,6 +49,7 @@ NB: there is a profusion of different Julia APIs here:
 - ForwardDiff requires f!(du, u) hence a closure or function object, DifferentialEquations allows context objects to be passed around.
 
 # Keyword arguments
+- `parameter_aggregator::Union{Nothing, PB.ParameterAggregator}=nothing`: provide Jacobian that supports parameters `p` as defined by `parameter_aggregator`
 - `jac_cellranges=modeldata.cellranges_all`: restrict Jacobian to this subset of Domains and Reactions (via operatorID).
 - `request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD`:  chunk size for `ForwardDiff` automatic differentiation
 - `fill_jac_diagonal=true`: (`jac=:ForwardDiffSparse` only) true to fill diagonal of `jac_prototype`
@@ -58,6 +59,7 @@ NB: there is a profusion of different Julia APIs here:
 """
 function jac_config_ode(
     jac_ad::Symbol, model::PB.Model, initial_state, modeldata::PB.ModelData, jac_ad_t_sparsity;
+    parameter_aggregator::Union{Nothing, PB.ParameterAggregator}=nothing,
     jac_cellranges=modeldata.cellranges_all,
     request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
     fill_jac_diagonal=true,
@@ -94,17 +96,31 @@ function jac_config_ode(
      
         du_template = similar(state_sms_vars_data)
         
-        jac = SolverFunctions.JacODEForwardDiffDense(
-            modeldata, 
-            jac_solverview, # use all Variables in model
-            jac_dispatchlists, # use only Reactions specified
-            du_template, 
-            jacconf
-        )
+        if isnothing(parameter_aggregator)
+            jac = SolverFunctions.JacODEForwardDiffDense(
+                modeldata, 
+                jac_solverview, # use all Variables in model
+                jac_dispatchlists, # use only Reactions specified
+                du_template, 
+                jacconf,
+            )
+    
+        else
+            jac = SolverFunctions.JacODEForwardDiffDense_p(
+                modeldata,
+                copy(parameter_aggregator),
+                jac_solverview, # use all Variables in model
+                jac_dispatchlists, # use only Reactions specified
+                du_template, 
+                jacconf,
+            )
+        end
 
         return (jac, nothing)
         
     elseif jac_ad == :ForwardDiffSparse
+        isnothing(parameter_aggregator) || 
+            throw(ArgumentError("parameter_aggregator not supported for Jacobian $jac_ad"))
         !isnothing(initial_state) || 
             throw(ArgumentError("initial_state must be supplied for Jacobian $jac_ad"))
         !isnothing(jac_ad_t_sparsity) || 
@@ -160,7 +176,152 @@ function jac_config_ode(
 end
 
 
+""" 
+    paramjac_config_ode(model::PB.Model, pa::PB.ParameterAggregator, modeldata::PB.ModelData; kwargs...)
+        -> paramjac::ParamJacODEForwardDiffDense
 
+Create parameter Jacobian function object `paramjac` to calculate (dense) parameter Jacobian using ForwardDiff.
+
+A set of model arrays of appropriate Dual number type is added to `modeldata`.
+
+# Keyword arguments
+- `filterT=nothing`: enable optimisation for the case where only a small number of parameter indices contribute to `paramjac` at model time `t` - 
+   supply a function `filterT(t) -> (pi_1, pi_2, ...)` to specify the parameter indices.
+- `paramjac_cellranges=modeldata.cellranges_all`: restrict Jacobian to this subset of Domains and Reactions (via operatorID).
+- `request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD`:  chunk size for `ForwardDiff` automatic differentiation
+- `generated_dispatch=true`: `true` to autogenerate code for dispatch (fast dispatch, slow compile)
+- `use_base_vars=String[]`: additional Variable full names not calculated by Jacobian, which instead use arrays from `modeldata` base arrays (arrays_idx=1) instead of allocating new AD Variables
+
+"""
+function paramjac_config_ode(
+    model::PB.Model, pa::PB.ParameterAggregator, modeldata::PB.ModelData;
+    filterT=nothing,
+    paramjac_cellranges=modeldata.cellranges_all,
+    request_adchunksize=ForwardDiff.DEFAULT_CHUNK_THRESHOLD,
+    generated_dispatch=true,
+    use_base_vars=String[],
+)
+    @info "paramjac_config_ode"
+
+    PB.check_modeldata(model, modeldata)
+
+    iszero(PALEOmodel.num_total(modeldata.solver_view_all)) ||
+        throw(ArgumentError("model contains implicit variables, solve as a DAE"))
+   
+    if isnothing(filterT)
+        # dense Jacobian 
+
+        # generate arrays with ODE layout for model Variables
+        state_sms_vars_data = similar(PALEOmodel.get_statevar_sms(modeldata.solver_view_all))
+        # state_vars_data = similar(PALEOmodel.get_statevar(modeldata.solver_view_all))
+        param_data = similar(PB.get_currentvalues(pa))
+    
+        chunk = ForwardDiff.Chunk(length(param_data), request_adchunksize)
+
+        paramjacconf = ForwardDiff.JacobianConfig(nothing, state_sms_vars_data, param_data, chunk)
+
+        PB.add_arrays_data!(model, modeldata, eltype(paramjacconf), "paramjac_ad"; use_base_vars)
+        arrays_idx_paramjac_ad = PB.num_arrays(modeldata)
+        paramjac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_paramjac_ad) # Variables from whole model
+        paramjac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_paramjac_ad, paramjac_cellranges; generated_dispatch)
+
+        pa_ad = PB.copy_new_eltype(eltype(paramjacconf), pa)
+
+        @info "  using ForwardDiff dense parameter Jacobian chunksize=$(ForwardDiff.chunksize(chunk)))"
+        
+        du_template = similar(state_sms_vars_data)
+        
+        paramjac = SolverFunctions.ParamJacODEForwardDiffDense(
+            modeldata, pa_ad, 
+            paramjac_solverview,  # use all Variables in model
+            paramjac_dispatchlists, # use only Reactions specified
+            du_template, 
+            paramjacconf,
+        )
+    else
+        # optimisation: function `filterT(t) -> (pi_1, pi_2, ...)` to specifies the parameter indices that contribute to Jacobian at time `t`
+        pj_eltype = ForwardDiff.Dual{Nothing, Float64, 1}
+
+        PB.add_arrays_data!(model, modeldata, pj_eltype, "paramjac_ad"; use_base_vars)
+        arrays_idx_paramjac_ad = PB.num_arrays(modeldata)
+        paramjac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_paramjac_ad) # Variables from whole model
+        paramjac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_paramjac_ad, paramjac_cellranges; generated_dispatch)
+    
+        pa_ad = PB.copy_new_eltype(pj_eltype, pa)
+    
+        @info "  using ForwardDiff dense parameter Jacobian eltype $pj_eltype (with filtering for relevant parameters at time t)"
+        
+        # generate workspace arrays with eltype pj_eltype
+        du_worksp = similar(PALEOmodel.get_statevar_sms(modeldata.solver_view_all), pj_eltype)
+        p_worksp = similar(PB.get_currentvalues(pa_ad))
+         
+        paramjac = SolverFunctions.ParamJacODEForwardDiffDenseT(
+            modeldata,
+            paramjac_solverview,  # use all Variables in model
+            paramjac_dispatchlists, # use only Reactions specified
+            pa_ad,
+            p_worksp,
+            du_worksp,
+            filterT,
+            0,
+        )
+    end    
+
+    return paramjac
+end
+
+
+"""
+    paramjacT_config_ode_p(model::PB.Model, pa::PB.ParameterAggregator, modeldata::PB.ModelData, filterT; kwargs...)
+        -> paramjac::ParamJacODEForwardDiffDenseT
+
+Create parameter Jacobian function object `paramjac` to calculate parameter Jacobian using ForwardDiff,
+where `filterT(t) -> (pi_1, pi_2, ...)` specifies the (small) number of parameter indices that contribute
+to the parameter Jacobian at time `t`.
+
+A set of model arrays of appropriate Dual number type is added to `modeldata`.
+"""
+function paramjacT_config_ode_p(
+    model::PB.Model, pa::PB.ParameterAggregator, modeldata::PB.ModelData, filterT;
+    paramjac_cellranges=modeldata.cellranges_all,
+    generated_dispatch=false,
+    use_base_vars=String[],
+)
+    @info "paramjacT_config_ode_p"
+
+    PB.check_modeldata(model, modeldata)
+
+    iszero(PALEOmodel.num_total(modeldata.solver_view_all)) ||
+        throw(ArgumentError("model contains implicit variables, solve as a DAE"))
+   
+    pj_eltype = ForwardDiff.Dual{Nothing, Float64, 1}
+
+    PB.add_arrays_data!(model, modeldata, pj_eltype, "paramjac_ad"; use_base_vars)
+    arrays_idx_paramjac_ad = PB.num_arrays(modeldata)
+    paramjac_solverview = PALEOmodel.SolverView(model, modeldata, arrays_idx_paramjac_ad) # Variables from whole model
+    paramjac_dispatchlists = PB.create_dispatch_methodlists(model, modeldata, arrays_idx_paramjac_ad, paramjac_cellranges; generated_dispatch)
+
+    pa_ad = PB.copy_new_eltype(pj_eltype, pa)
+
+    @info "  using ForwardDiff dense parameter Jacobian eltype $pj_eltype (with filtering for relevant parameters at time t)"
+    
+    # generate workspace arrays with eltype pj_eltype
+    du_worksp = similar(PALEOmodel.get_statevar_sms(modeldata.solver_view_all), pj_eltype)
+    p_worksp = similar(PB.get_currentvalues(pa_ad))
+     
+    paramjac = ParamJacODEForwardDiffDenseT(
+        modeldata,
+        paramjac_solverview,  # use all Variables in model
+        paramjac_dispatchlists, # use only Reactions specified
+        pa_ad,
+        p_worksp,
+        du_worksp,
+        filterT,
+        0,
+    )
+
+    return paramjac
+end
 
 ###################################################################
 # DAE Jacobians using ForwardDiff

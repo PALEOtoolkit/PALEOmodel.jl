@@ -440,7 +440,18 @@ Iterate through solution and recalculate model fields
 """
 function calc_output_sol! end
 
-function calc_output_sol!(outputwriter, model::PB.Model, sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution}, tspan, initial_state, modeldata)
+calc_output_sol!(outputwriter, model::PB.Model, sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution}, tspan, initial_state, modeldata) =
+    calc_output_sol!(outputwriter, model, nothing, sol, tspan, initial_state, modeldata)
+
+function calc_output_sol!(
+    outputwriter, 
+    model::PB.Model,
+    pa::Union{Nothing, PB.ParameterAggregator},
+    sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution}, 
+    tspan,
+    initial_state,
+    modeldata
+)
     
     @info "ODE.calc_output_sol!: $(length(sol)) records"
     if length(sol.t) != length(sol)
@@ -460,7 +471,11 @@ function calc_output_sol!(outputwriter, model::PB.Model, sol::Union{SciMLBase.OD
         PALEOmodel.set_tforce!(modeldata.solver_view_all, tmodel)   
         PALEOmodel.set_statevar!(modeldata.solver_view_all, sol[:, tidx])
             
-        PB.do_deriv(modeldata.dispatchlists_all)
+        if isnothing(pa)
+            PB.do_deriv(modeldata.dispatchlists_all)
+        else
+            PB.do_deriv(modeldata.dispatchlists_all, pa)
+        end
 
         PALEOmodel.OutputWriters.add_record!(outputwriter, model, modeldata, tmodel)
     end
