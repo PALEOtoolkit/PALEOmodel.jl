@@ -18,6 +18,10 @@ import Sparspak
 
 # import Infiltrator # Julia debugger
 
+#####################################################################################
+# Adaptors and function objects for NLsolve (non-linear steady-state solvers)
+#####################################################################################
+
 """
     StepClampMultAll!(minvalue, maxvalue, minmult, maxmult) -> scma!
     StepClampMultAll!(minvalue, maxvalue, maxratio) = StepClampMultAll!(minvalue, maxvalue, 1.0/maxratio, maxratio)
@@ -190,9 +194,13 @@ function (slsp::SparseLinsolveSparspak64x2)(x::Vector, A::SparseArrays.SparseMat
     return nothing
 end
 
+##############################################################################################################
+# Adaptors (function objects) for SciML ODE solvers
+##############################################################################################################
+
 """
     ModelODE(
-        modeldata; 
+        modeldata, [parameter_aggregator]; 
         solver_view=modeldata.solver_view_all,
         dispatchlists=modeldata.dispatchlists_all
     ) -> f::ModelODE
@@ -201,10 +209,11 @@ Function object to calculate model time derivative and adapt to SciML ODE solver
 
 Call as `f(du,u, p, t)`
 """
-mutable struct ModelODE{S <: PALEOmodel.SolverView, D}
+mutable struct ModelODE{S <: PALEOmodel.SolverView, D, P <: Union{Nothing, PB.ParameterAggregator}}
     modeldata::PB.ModelData
     solver_view::S
     dispatchlists::D
+    parameter_aggregator::P
     nevals::Int
 end
 
@@ -212,15 +221,25 @@ ModelODE(
     modeldata; 
     solver_view=modeldata.solver_view_all,
     dispatchlists=modeldata.dispatchlists_all
-) = ModelODE(modeldata, solver_view, dispatchlists, 0)
+) = ModelODE(modeldata, solver_view, dispatchlists, nothing, 0)
 
+ModelODE(
+    modeldata, parameter_aggregator; 
+    solver_view=modeldata.solver_view_all,
+    dispatchlists=modeldata.dispatchlists_all
+) = ModelODE(modeldata, solver_view, dispatchlists, copy(parameter_aggregator), 0)
 
 function (m::ModelODE)(du,u, p, t)
    
     PALEOmodel.set_statevar!(m.solver_view, u)
     PALEOmodel.set_tforce!(m.solver_view, t)
 
-    PB.do_deriv(m.dispatchlists)
+    if isnothing(m.parameter_aggregator)
+        PB.do_deriv(m.dispatchlists)
+    else
+        copyto!(m.parameter_aggregator, p)
+        PB.do_deriv(m.dispatchlists, m.parameter_aggregator)
+    end
 
     PALEOmodel.get_statevar_sms!(du, m.solver_view)
    
@@ -254,6 +273,84 @@ end
 
 (mt::ModelODE_at_t)(F, u) = mt.modelode(F, u, nothing, mt.t)
 
+"""
+    ModelODE_p_at_t(
+        modeldata, parameter_aggregator; 
+        solver_view=modeldata.solver_view_all,
+        dispatchlists=modeldata.dispatchlists_all
+    ) -> f::ModelODE_p_at_t
+
+Function object to calculate model derivative `du` at `t` with parameter vector `p`, eg to adapt to ForwardDiff or NLsolve interface
+which require a function signature that includes state vector `u` only.
+
+Call as:
+
+    set_p_t!(f, p, t)
+    f(du, u)  # du(u) at p, t
+"""
+mutable struct ModelODE_p_at_t{M <: ModelODE, P <: AbstractVector}
+    modelode::M
+    p::P
+    t::Float64
+end
+
+ModelODE_p_at_t(
+    modeldata, parameter_aggregator; 
+    solver_view=modeldata.solver_view_all,
+    dispatchlists=modeldata.dispatchlists_all
+) = ModelODE_p_at_t(
+        ModelODE(modeldata, parameter_aggregator; solver_view, dispatchlists),
+        PB.get_currentvalues(parameter_aggregator),
+        NaN
+    )
+
+function set_p_t!(mt::ModelODE_p_at_t, p, t)
+    mt.p .= p
+    mt.t = t
+end
+
+(mt::ModelODE_p_at_t)(du, u) = mt.modelode(du, u, mt.p, mt.t)
+
+
+
+"""
+    ModelODE_u_at_t(
+        modeldata, u_template, parameter_aggregator; 
+        solver_view=modeldata.solver_view_all,
+        dispatchlists=modeldata.dispatchlists_all
+    ) -> f::ModelODE_u_at_t
+
+Function object to calculate model derivative `du` at `t` with state vector `u`, eg to adapt to ForwardDiff or NLsolve interface
+which require a function signature that includes parameter vector `p` only.
+
+Call as:
+
+    set_u_t!(f, u, t)
+    f(du, p)   # du(p) at u, t
+"""
+mutable struct ModelODE_u_at_t{M <: ModelODE, U <: AbstractVector}
+    modelode::M
+    u::U
+    t::Float64
+end
+
+ModelODE_u_at_t(
+    modeldata, u_template::AbstractVector, parameter_aggregator::PB.ParameterAggregator; 
+    solver_view=modeldata.solver_view_all,
+    dispatchlists=modeldata.dispatchlists_all
+) = ModelODE_u_at_t(
+        ModelODE(modeldata, parameter_aggregator; solver_view, dispatchlists),
+        similar(u_template),
+        NaN
+    )
+
+function set_u_t!(mt::ModelODE_u_at_t, u, t)
+    mt.u .= u
+    mt.t = t
+end
+
+(mt::ModelODE_u_at_t)(F, p) = mt.modelode(F, mt.u, p, mt.t)
+
 
 """
     JacODEForwardDiffDense(
@@ -263,6 +360,14 @@ end
         du_template, 
         jacconf,
     ) -> jac::JacODEForwardDiffDense
+
+    JacODEForwardDiffDense_p(
+        modeldata, pa::PB.ParameterAggregator; 
+        solver_view=modeldata.solver_view_all,
+        dispatchlists=modeldata.dispatchlists_all,
+        du_template, 
+        jacconf,
+    ) -> jac::JacODEForwardDiffDense_p
 
 Function object to calculate dense Jacobian in form required for SciML ODE solver.
 
@@ -301,6 +406,39 @@ function (jfdd::JacODEForwardDiffDense)(J, u, p, t)
 
     return nothing
 end
+
+mutable struct JacODEForwardDiffDense_p{MD <: PB.ModelData, M, W, J <: ForwardDiff.JacobianConfig}
+    modeldata::MD
+    deriv_at_p_t::M
+    du_template::W
+    jacconf::J    
+    njacs::Int64
+end
+
+function JacODEForwardDiffDense_p(
+    modeldata::PB.ModelData, pa::PB.ParameterAggregator, solver_view, dispatchlists, du_template, jacconf::ForwardDiff.JacobianConfig,
+)
+    return JacODEForwardDiffDense_p(
+        modeldata,
+        ModelODE_p_at_t(modeldata, pa; solver_view=solver_view, dispatchlists=dispatchlists), 
+        du_template, 
+        jacconf, 
+        0,
+    )
+end
+
+
+function (jfdd::JacODEForwardDiffDense_p)(J, u, p, t)
+   
+    set_p_t!(jfdd.deriv_at_p_t, p, t)
+   
+    ForwardDiff.jacobian!(J, jfdd.deriv_at_p_t,  jfdd.du_template, u, jfdd.jacconf)   
+    jfdd.njacs += 1  
+
+    return nothing
+end
+
+
 
 """
     JacODEForwardDiffSparse(
@@ -385,6 +523,126 @@ function set_t!(mt::JacODE_at_t, t)
 end
 
 (jt::JacODE_at_t)(J, u) = jt.jacode(J, u, nothing, jt.t)
+
+
+"""
+    ParamJacODEForwardDiffDense(
+        modeldata, PB.ParameterAggregator; 
+        solver_view=modeldata.solver_view_all,
+        dispatchlists=modeldata.dispatchlists_all,
+        du_template, 
+        paramjacconf,
+    ) -> paramjac::ParamJacODEForwardDiffDense
+
+Function object to calculate dense parameter Jacobian in form required for SciML ODE solver.
+
+`solver_view`, `dispatchlists` should correspond to `modeldata`, which should
+have the appropriate element type for ForwardDiff Dual numbers.
+
+Call as `paramjac(pJ, u, p, t)`
+"""
+mutable struct ParamJacODEForwardDiffDense{MD <: PB.ModelData, M, W, J <: ForwardDiff.JacobianConfig}
+    modeldata::MD
+    deriv_at_u_t::M
+    du_template::W
+    paramjacconf::J    
+    njacs::Int64
+end
+
+function ParamJacODEForwardDiffDense(
+    modeldata::PB.ModelData, pa::PB.ParameterAggregator, solver_view, dispatchlists, du_template, paramjacconf::ForwardDiff.JacobianConfig,
+)
+    return ParamJacODEForwardDiffDense(
+        modeldata,
+        ModelODE_u_at_t(modeldata, du_template, pa; solver_view=solver_view, dispatchlists=dispatchlists), 
+        du_template, 
+        paramjacconf, 
+        0,
+    )
+end
+
+
+function (pjfdd::ParamJacODEForwardDiffDense)(pJ, u, p, t)
+   
+    set_u_t!(pjfdd.deriv_at_u_t, u, t)
+
+    ForwardDiff.jacobian!(pJ, pjfdd.deriv_at_u_t,  pjfdd.du_template, p, pjfdd.paramjacconf)   
+    pjfdd.njacs += 1  
+
+    return nothing
+end
+
+
+"""
+    mutable struct ParamJacODEForwardDiffDenseT{S <: PALEOmodel.SolverView, D, P, PW, UW, F}
+        modeldata::PB.ModelData
+        solver_view::S
+        dispatchlists::D
+        parameter_aggregator::P
+        p_worksp::PW
+        du_worksp::UW
+        filterT::F
+        nevals::Int
+    end
+
+Function object to calculate dense parameter Jacobian in form required for SciML ODE solvers, optimised
+for the case where `paramjac` at time t has only a small number of nonzero columns (ie only a small number of 
+paramters affect `du/dt` at time `t`).
+
+`filterT(t) -> (pidx_1, p_idx_2, ..)` should be a function that returns a Tuple of indices in the parameter vector
+that affect `du/dt` at time `t` and hence have non-zero columns in `paramjac`.
+
+`solver_view`, `dispatchlists` should correspond to `modeldata`, which should
+have the appropriate element type for ForwardDiff Dual numbers.
+
+Call as `paramjac(pJ, u, p, t)`
+"""
+mutable struct ParamJacODEForwardDiffDenseT{S <: PALEOmodel.SolverView, D, P <: PB.ParameterAggregator, PW, UW, F}
+    modeldata::PB.ModelData
+    solver_view::S
+    dispatchlists::D
+    parameter_aggregator::P
+    p_worksp::PW
+    du_worksp::UW
+    filterT::F
+    nevals::Int
+end
+
+
+function (pjfddt::ParamJacODEForwardDiffDenseT)(pJ, u, p, t)
+   
+    PALEOmodel.set_statevar!(pjfddt.solver_view, u)
+    PALEOmodel.set_tforce!(pjfddt.solver_view, t)
+
+    active_pidx = pjfddt.filterT(t) # Tuple with indices of parameters with non-zero pJ at time t
+
+    for j in eachindex(p)
+        if j in active_pidx
+            # calculate derivative wrt p[j] -> j'th column of parameter Jacobian
+            # NB: low-level use of ForwardDiff.Dual, with a single partial to calculate a single derivative
+
+            # fill p_worksp and set parameter_aggregator with Dual numbers with partials = 0.0, except for parameter j
+            pjfddt.p_worksp .= p
+            pjfddt.p_worksp[j] = ForwardDiff.Dual(p[j], 1.0)
+            copyto!(pjfddt.parameter_aggregator, pjfddt.p_worksp)
+
+            PB.do_deriv(pjfddt.dispatchlists, pjfddt.parameter_aggregator)
+        
+            PALEOmodel.get_statevar_sms!(pjfddt.du_worksp, pjfddt.solver_view)
+            # fill this column in parameter Jacobian
+            for i in eachindex(u)
+                pJ[i, j] = only(pjfddt.du_worksp[i].partials)
+            end
+        else
+            # zero out this column in Jacobian
+            pJ[:, j] .= 0.0
+        end
+    end
+
+    pjfddt.nevals += 1  
+
+    return nothing
+end
 
 
 ########################################################################
