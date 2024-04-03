@@ -217,6 +217,10 @@ mutable struct ModelODE{S <: PALEOmodel.SolverView, D, P <: Union{Nothing, PB.Pa
     nevals::Int
 end
 
+# backwards compatibility
+ModelODE(modeldata, solver_view, dispatchlists, nevals) =
+    ModelODE(modeldata, solver_view, dispatchlists, nothing, nevals)
+
 ModelODE(
     modeldata; 
     solver_view=modeldata.solver_view_all,

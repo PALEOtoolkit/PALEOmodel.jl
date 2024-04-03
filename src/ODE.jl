@@ -68,7 +68,7 @@ function ODEfunction(
         @info "ODEfunction:  using mass matrix for DAE with $num_constraints algebraic constraints"       
     end
 
-    m = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
+    m = SolverFunctions.ModelODE(modeldata; solver_view=modeldata.solver_view_all, dispatchlists=modeldata.dispatchlists_all)
        
     jac, jac_prototype = PALEOmodel.JacobianAD.jac_config_ode(
         jac_ad, model, initial_state, modeldata, jac_ad_t_sparsity;
@@ -406,7 +406,7 @@ function get_inconsistent_initial_deriv(
     # Evaluate initial derivative
     # ODE variable derivative will now be consistent
     # implicit (Total) derivative will not be consistent
-    m = SolverFunctions.ModelODE(modeldata, modeldata.solver_view_all, modeldata.dispatchlists_all, 0)
+    m = SolverFunctions.ModelODE(modeldata; solver_view=modeldata.solver_view_all, dispatchlists=modeldata.dispatchlists_all)
     m(initial_deriv, initial_state , nothing, initial_t)
 
     # Set initial_deriv (ie constraint) for algebraic variables - shouldn't matter according to IDA doc ?
