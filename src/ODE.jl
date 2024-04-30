@@ -540,7 +540,7 @@ Print solution statistics
 """
 function print_sol_stats end
 
-function print_sol_stats(sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution})
+function print_sol_stats(sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution, SciMLBase.RODESolution, })
 
     io_stats = IOBuffer()
     try
