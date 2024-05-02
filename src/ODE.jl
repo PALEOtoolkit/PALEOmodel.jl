@@ -501,7 +501,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.Nonlinea
     return nothing
 end
 
-function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln,  modeldata)
+function calc_output_sol!(outputwriter, model::PB.Model, tsoln::AbstractVector, soln::AbstractVector, modeldata)
 
     PALEOmodel.OutputWriters.initialize!(outputwriter, model, modeldata, length(tsoln))
 
@@ -517,7 +517,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln,  modeldata
     return nothing
 end
 
-function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln, modelode, modeldata)
+function calc_output_sol!(outputwriter, model::PB.Model, tsoln::AbstractVector, soln::AbstractVector, modelode, modeldata)
 
     PALEOmodel.OutputWriters.initialize!(outputwriter, model, modeldata, length(tsoln))
 
