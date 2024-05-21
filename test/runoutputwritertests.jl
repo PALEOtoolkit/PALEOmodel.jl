@@ -90,13 +90,36 @@ end
     all_values.global.O .= [4e19]
     PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
 
-    tmpfile = tempname(; cleanup=true) 
+    tmpfile = tempname(; cleanup=true)
+
+    output.user_data["testString"] = "hello"
+    output.user_data["testInt64"] = 42
+    output.user_data["testFloat64"] = 42.0
+    output.user_data["testVecString"] = ["hello", "world"]
+    output.user_data["testVecInt64"] = [42, 43]
+    output.user_data["testVecFloat64_1"] = [42.0]
+    output.user_data["testVecFloat64"] = [42.0, 43.0]
+
     PALEOmodel.OutputWriters.save_netcdf(output, tmpfile)
 
     load_output = PALEOmodel.OutputWriters.load_netcdf!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
 
     O_array = PALEOmodel.get_array(load_output, "global.O")
     @test O_array.values == [2e19, 4e19]
+
+    function test_user_key_type_value(k, v)
+        lv = load_output.user_data[k]
+        @test typeof(lv) == typeof(v)
+        @test lv == v
+    end
+      
+    test_user_key_type_value("testString", "hello")
+    test_user_key_type_value("testInt64", 42)
+    test_user_key_type_value("testFloat64", 42.0)
+    test_user_key_type_value("testVecString", ["hello", "world"])
+    test_user_key_type_value("testVecInt64", [42, 43])
+    @test_broken load_output.user_data["testVecFloat64_1"] == [42.0] # returned as a scalar
+    test_user_key_type_value("testVecFloat64", [42.0, 43.0])
 
 end
 
