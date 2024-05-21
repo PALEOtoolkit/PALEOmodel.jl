@@ -422,6 +422,7 @@ end
 """
     calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.ODESolution, tspan, initial_state, modeldata)
     calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.DAESolution, tspan, initial_state, modeldata)
+    calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.RODESolution, tspan, initial_state, modeldata)
     calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.NonlinearSolution, tspan, initial_state, modeldata)
     calc_output_sol!(outputwriter, model::PB.Model, tsoln::AbstractVector, soln::AbstractVector,  modeldata)
 
@@ -440,14 +441,14 @@ Iterate through solution and recalculate model fields
 """
 function calc_output_sol! end
 
-calc_output_sol!(outputwriter, model::PB.Model, sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution}, tspan, initial_state, modeldata) =
+calc_output_sol!(outputwriter, model::PB.Model, sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution, SciMLBase.RODESolution}, tspan, initial_state, modeldata) =
     calc_output_sol!(outputwriter, model, nothing, sol, tspan, initial_state, modeldata)
 
 function calc_output_sol!(
     outputwriter, 
     model::PB.Model,
     pa::Union{Nothing, PB.ParameterAggregator},
-    sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution}, 
+    sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution, SciMLBase.RODESolution}, 
     tspan,
     initial_state,
     modeldata
@@ -500,7 +501,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, sol::SciMLBase.Nonlinea
     return nothing
 end
 
-function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln,  modeldata)
+function calc_output_sol!(outputwriter, model::PB.Model, tsoln::AbstractVector, soln::AbstractVector, modeldata)
 
     PALEOmodel.OutputWriters.initialize!(outputwriter, model, modeldata, length(tsoln))
 
@@ -516,7 +517,7 @@ function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln,  modeldata
     return nothing
 end
 
-function calc_output_sol!(outputwriter, model::PB.Model, tsoln, soln, modelode, modeldata)
+function calc_output_sol!(outputwriter, model::PB.Model, tsoln::AbstractVector, soln::AbstractVector, modelode, modeldata)
 
     PALEOmodel.OutputWriters.initialize!(outputwriter, model, modeldata, length(tsoln))
 
@@ -535,12 +536,13 @@ end
     print_sol_stats(sol::SciMLBase.ODESolution)
     print_sol_stats(sol::SciMLBase.DAESolution)
     print_sol_stats(sol::SciMLBase.NonlinearSolution)
+    print_sol_stats(sol::SciMLBase.RODESolution)
 
 Print solution statistics
 """
 function print_sol_stats end
 
-function print_sol_stats(sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution})
+function print_sol_stats(sol::Union{SciMLBase.ODESolution, SciMLBase.DAESolution, SciMLBase.RODESolution, })
 
     io_stats = IOBuffer()
     try
