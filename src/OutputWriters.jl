@@ -1326,13 +1326,69 @@ function grid_to_netcdf!(ds, grid::PB.Grids.UnstructuredColumnGrid)
     return (("cells", ), identity)
 end
 
+function grid_to_netcdf!(ds, grid::PB.Grids.CartesianArrayGrid{N}) where {N}
+
+    ds.attrib["PALEO_GridType"] = "CartesianArrayGrid"
+
+    _cartesiandimscoords_to_netcdf(ds, grid)
+
+    # subdomains
+    for (name, subdom) in grid.subdomains
+        subdomain_to_netcdf!(ds, name, subdom)
+    end
+
+    return (Tuple(grid.dimnames), identity)
+end
+
 function grid_to_netcdf!(ds, grid::PB.Grids.CartesianLinearGrid{N}) where {N}
 
     ds.attrib["PALEO_GridType"] = "CartesianLinearGrid"
 
+    ds.attrib["PALEO_columns"] = grid.ncolumns
+
+    _cartesiandimscoords_to_netcdf(ds, grid)
+
+    nc_linear_index = NCDatasets.defVar(ds, "linear_index", grid.linear_index .- 1, grid.dimnames) # netcdf zero indexed
+    nc_linear_index.attrib["coordinates"] = join(grid.dimnames, " ")
+ 
+    # # CF conventions 'lossless compression by gathering'
+    # poorly supported ? (doesn't work with xarray or iris)
+    # nc_cells = NCDatasets.defVar(ds, "cells", Int, ("cells",))
+    # # rightmost entry in the compress list varies most rapidly
+    # # (C like array convention is used by netCDF CF)
+    # # we reverse dimnames so leftmost entry in dimnames varies most rapidly
+    # # (so we have a Julia/Fortran/Matlab like array convention for compress)
+    # nc_cells.attrib["compress"] = join(reverse(grid.dimnames), " ") 
+    # cells = Int[]
+    # for ci in grid.cartesian_index
+    #     cit = Tuple(ci)
+    #     cell = cit[1] - 1
+    #     cell += (cit[2]-1)*grid.dims[1]
+    #     if N == 3
+    #         cell += (cit[3])*grid.dims[1]*grid.dims[2]
+    #     end
+    #     push!(cells, cell)
+    # end
+    # nc_cells[:] .= cells
+
+    # subdomains
+    for (name, subdom) in grid.subdomains
+        subdomain_to_netcdf!(ds, name, subdom)
+    end
+
+    spatial_unpackfn = d -> PB.Grids.internal_to_cartesian(grid, d) # unpack linear representation into cartesian grid
+
+    return (Tuple(grid.dimnames), spatial_unpackfn)
+end
+
+function _cartesiandimscoords_to_netcdf(
+    ds::NCDatasets.Dataset,
+    grid::Union{PB.Grids.CartesianLinearGrid{N}, PB.Grids.CartesianArrayGrid{N}}
+) where {N}
+  
     # dimensions
     NCDatasets.defDim(ds, "cells", grid.ncells)
-    ds.attrib["PALEO_columns"] = grid.ncolumns
+   
     ds.attrib["PALEO_dimnames"] = grid.dimnames
     for (dimname, dim) in zip(grid.dimnames, grid.dims)
         NCDatasets.defDim(ds, dimname, dim)
@@ -1372,45 +1428,19 @@ function grid_to_netcdf!(ds, grid::PB.Grids.CartesianLinearGrid{N}) where {N}
             end
         end
     end
+
+    return nothing
     
-    nc_linear_index = NCDatasets.defVar(ds, "linear_index", grid.linear_index .- 1, grid.dimnames) # netcdf zero indexed
-    nc_linear_index.attrib["coordinates"] = join(grid.dimnames, " ")
-
-    # # CF conventions 'lossless compression by gathering'
-    # poorly supported ? (doesn't work with xarray or iris)
-    # nc_cells = NCDatasets.defVar(ds, "cells", Int, ("cells",))
-    # # rightmost entry in the compress list varies most rapidly
-    # # (C like array convention is used by netCDF CF)
-    # # we reverse dimnames so leftmost entry in dimnames varies most rapidly
-    # # (so we have a Julia/Fortran/Matlab like array convention for compress)
-    # nc_cells.attrib["compress"] = join(reverse(grid.dimnames), " ") 
-    # cells = Int[]
-    # for ci in grid.cartesian_index
-    #     cit = Tuple(ci)
-    #     cell = cit[1] - 1
-    #     cell += (cit[2]-1)*grid.dims[1]
-    #     if N == 3
-    #         cell += (cit[3])*grid.dims[1]*grid.dims[2]
-    #     end
-    #     push!(cells, cell)
-    # end
-    # nc_cells[:] .= cells
-
-    # subdomains
-    for (name, subdom) in grid.subdomains
-        subdomain_to_netcdf!(ds, name, subdom)
-    end
-
-    spatial_unpackfn = d -> PB.Grids.internal_to_cartesian(grid, d) # unpack linear representation into cartesian grid
-
-    return (Tuple(grid.dimnames), spatial_unpackfn)
 end
+    
+
 
 function netcdf_to_grid(ds::NCDatasets.Dataset, dsvars::Dict)
     gridtypes = Dict(
         "Nothing" => Nothing,
         "UnstructuredVectorGrid" => PB.Grids.UnstructuredVectorGrid,
         "UnstructuredColumnGrid" => PB.Grids.UnstructuredColumnGrid,
+        "CartesianArrayGrid" => PB.Grids.CartesianArrayGrid,
         "CartesianLinearGrid" => PB.Grids.CartesianLinearGrid,
     )
 
@@ -1469,45 +1499,33 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.
     return (PB.Grids.UnstructuredColumnGrid(ncells, Icolumns, z_coords, columnnames, subdomains), identity)
 end
 
-function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
+function netcdf_to_grid(::Type{PB.Grids.CartesianArrayGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
     
-    ncells = ds.dim["cells"]
-    ncolumns = ds.attrib["PALEO_columns"]
-
     subdomains = netcdf_to_subdomains(dsvars)  
 
-    # dimensions and coordinates
-    dimnames = ncattrib_as_vector(ds, "PALEO_dimnames")
-    dims = Int[]
-    zidxsurface = ds.attrib["PALEO_zidxsurface"]
-    display_mult = ncattrib_as_vector(ds, "PALEO_display_mult")
-   
-    coords = Vector{Vector{Float64}}()
-    coords_edges = Vector{Vector{Float64}}()
-    londim, latdim, zdim = 0, 0, 0
+    ncells, dimnames, dims, zidxsurface, display_mult, coords, coords_edges, londim, latdim, zdim =
+        _netcdf_to_cartesiandimscoords(PB.Grids.CartesianArrayGrid, ds, dsvars)
 
-    for (i, dimname) in enumerate(dimnames)
-        push!(dims, ds.dim[dimname])
-        if haskey(dsvars, dimname)
-            dimvar = dsvars[dimname]
-            push!(coords, Array(dimvar))
-            axis = get(dimvar.attrib, "axis", nothing)
-            if axis == "X"
-                global londim = i
-            elseif axis == "Y"
-                global latdim = i
-            elseif axis == "Z"
-                global zdim = i
-            end
-            bndsname = dimname*"_bnds"
-            if haskey(dsvars, bndsname)
-                push!(coords_edges, vcat(ds[bndsname][1, :], ds[bndsname][2, end]))
-            end
-        end
-    end
-    isempty(coords) || (length(coords) == length(dimnames)) || error("spatial coordinates present but not on all dimensions")
-    isempty(coords_edges) || (length(coords_edges) == length(dimnames)) || error("spatial coordinates edges present but not on all dimensions")
-     
+    grid = PB.Grids.CartesianArrayGrid{length(dims)}(
+        ncells,
+        dimnames, dims,
+        coords, coords_edges,
+        londim, latdim, zdim,
+        zidxsurface, display_mult,
+        subdomains,
+    )
+    
+    return (grid, identity)
+end
+
+function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
+    
+    subdomains = netcdf_to_subdomains(dsvars)  
+
+    ncells, dimnames, dims, zidxsurface, display_mult, coords, coords_edges, londim, latdim, zdim =
+        _netcdf_to_cartesiandimscoords(PB.Grids.CartesianLinearGrid, ds, dsvars)
+    ncolumns = ds.attrib["PALEO_columns"]
+
     # convert back to linear vectors
     linear_index = Array(dsvars["linear_index"]) .+ 1 # netcdf zero based
     # reconstruct cartesian index 
@@ -1541,6 +1559,48 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dat
     return (grid, spatial_packfn)
 end
 
+function _netcdf_to_cartesiandimscoords(
+    ::Type{GT}, 
+    ds::NCDatasets.Dataset,
+    dsvars::Dict,
+) where {GT <: Union{PB.Grids.CartesianArrayGrid, PB.Grids.CartesianLinearGrid}}
+
+    ncells = ds.dim["cells"]
+    
+    # dimensions and coordinates
+    dimnames = ncattrib_as_vector(ds, "PALEO_dimnames")
+    dims = Int[]
+    zidxsurface = ds.attrib["PALEO_zidxsurface"]
+    display_mult = ncattrib_as_vector(ds, "PALEO_display_mult")
+   
+    coords = Vector{Vector{Float64}}()
+    coords_edges = Vector{Vector{Float64}}()
+    londim, latdim, zdim = 0, 0, 0
+
+    for (i, dimname) in enumerate(dimnames)
+        push!(dims, ds.dim[dimname])
+        if haskey(dsvars, dimname)
+            dimvar = dsvars[dimname]
+            push!(coords, Array(dimvar))
+            axis = get(dimvar.attrib, "axis", nothing)
+            if axis == "X"
+                global londim = i
+            elseif axis == "Y"
+                global latdim = i
+            elseif axis == "Z"
+                global zdim = i
+            end
+            bndsname = dimname*"_bnds"
+            if haskey(dsvars, bndsname)
+                push!(coords_edges, vcat(ds[bndsname][1, :], ds[bndsname][2, end]))
+            end
+        end
+    end
+    isempty(coords) || (length(coords) == length(dimnames)) || error("spatial coordinates present but not on all dimensions")
+    isempty(coords_edges) || (length(coords_edges) == length(dimnames)) || error("spatial coordinates edges present but not on all dimensions")
+
+    return ncells, dimnames, dims, zidxsurface, display_mult, coords, coords_edges, londim, latdim, zdim
+end
 
 function name_to_netcdf(vname, attributes)
 
@@ -1566,8 +1626,12 @@ function attributes_to_netcdf!(v, attributes)
     for (aname, aval) in attributes
         # TODO serialize/deserialize attributes with type conversion
         
-        if aname == :data_dims
-            aval = String[v for v in aval] # Tuple to vector
+        if aname == :_FillValue
+            # shouldn't happen as this will never be set by PALEO, and should be filtered out when netcdf file is read
+            @warn "attributes_to_netcdf! netcdf variable $v ignoring netcdf reserved attribute $aname = $aval"
+            continue
+        elseif aname == :data_dims
+            aval = String[v for v in aval] # Tuple to vector        
         else
             if (typeof(aval) in (Float64, Int64, String, Vector{Float64}, Vector{Int64}, Vector{String})) #  Bool))
                 # supported netCDF type, no conversion
@@ -1604,7 +1668,10 @@ function netcdf_to_attributes(v)
     for (aname, avalnc) in v.attrib
         anamesym = Symbol(aname)
         # try known attribute then generic, then guess boolean conversions, then just leave as string
-        if haskey(known_attrib_to_typed, anamesym)
+        if anamesym == :_FillValue
+            # ignore reserved netcdf attributes
+            continue
+        elseif haskey(known_attrib_to_typed, anamesym)
             aval = known_attrib_to_typed[anamesym](avalnc)
         elseif PB.is_standard_attribute(anamesym) && PB.standard_attribute_type(anamesym) <: AbstractVector
             aval = isa(avalnc, Vector) ? avalnc : [avalnc] # stored as a vector but returned as a scalar if length 1
