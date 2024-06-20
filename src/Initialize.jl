@@ -26,6 +26,7 @@ and supplying `method_barrier` (a thread barrier to add to `ReactionMethod` disp
 
 # Keyword summary
 - `pickup_output=nothing`: OutputWriter with pickup data to initialise from
+- `check_units_opt=:no`: check linked Variable units are consistent (:no to disable check, :warn to warn and continue, :error to error and stop)
 - `eltype::Type=Float64`: default data type to use for model arrays
 - `eltypemap=Dict{String, DataType}()`: Dict of data types to look up Variable :datatype attribute
 - `threadsafe=false`: true to create thread safe Atomic Variables where Variable attribute `:atomic==true`
@@ -37,9 +38,10 @@ and supplying `method_barrier` (a thread barrier to add to `ReactionMethod` disp
 """
 function initialize!(
     model::PB.Model; 
-    eltype=Float64,
-    eltypemap=Dict{String, DataType}(), 
     pickup_output::Union{Nothing, AbstractOutputWriter}=nothing,
+    check_units_opt=:no,
+    eltype=Float64,
+    eltypemap=Dict{String, DataType}(),     
     threadsafe=false,
     method_barrier=threadsafe ? 
         PB.reaction_method_thread_barrier(
@@ -62,7 +64,7 @@ function initialize!(
     modeldata = PB.create_modeldata(model, eltype; threadsafe)
    
     # Allocate variables
-    @timeit "allocate_variables" PB.allocate_variables!(model, modeldata, 1; eltypemap)
+    @timeit "allocate_variables" PB.allocate_variables!(model, modeldata, 1; eltypemap, check_units_opt)
 
     # check all variables allocated
     PB.check_ready(model, modeldata; expect_hostdep_varnames)
