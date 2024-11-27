@@ -61,6 +61,9 @@ function initialize!(
     ================================================================================
     """
 
+    # check Variable linking early and exit if problems, so user sees appropriate error not a downstream consequence when allocating variable etc
+    PB.check_variable_links(model; throw_on_error=true, expect_hostdep_varnames)
+
     modeldata = PB.create_modeldata(model, eltype; threadsafe)
    
     # Allocate variables
