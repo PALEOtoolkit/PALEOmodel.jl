@@ -70,7 +70,7 @@ function initialize!(
     @timeit "allocate_variables" PB.allocate_variables!(model, modeldata, 1; eltypemap, check_units_opt)
 
     # check all variables allocated
-    PB.check_ready(model, modeldata; expect_hostdep_varnames)
+    PB.check_ready(model, modeldata)
 
     # Create modeldata.solver_view_all for the entire model
     if SolverView_all
