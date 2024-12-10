@@ -183,21 +183,29 @@ function get_array(
     coords::Union{Nothing, AbstractVector}=nothing
 )
 
-    # get data NB: with original coords or no coords
-    varray = _get_array(fr, allselectargs)
+    varray = nothing
 
-    if !isnothing(coords)
-        check_coords_argument(coords) ||
-            error("coords argument should be of form 'coords=[\"z\"=>zmid::FieldRecord, zlower::FieldRecord, zupper::FieldRecord), ...]")
+    try
+        # get data NB: with original coords or no coords
+        varray = _get_array(fr, allselectargs)
 
-        # get arrays for replacement coordinates
-        vec_coord_arrays = [
-            coord_name => Tuple(_get_array(coord_fr, allselectargs) for coord_fr in coord_fieldrecords) 
-            for (coord_name, coord_fieldrecords) in coords
-        ]
+        if !isnothing(coords)
+            check_coords_argument(coords) ||
+                error("coords argument should be of form 'coords=[\"z\"=>zmid::FieldRecord, zlower::FieldRecord, zupper::FieldRecord), ...]")
 
-        # replace coordinates
-        varray = update_coordinates(varray, vec_coord_arrays)
+            # get arrays for replacement coordinates
+            vec_coord_arrays = [
+                coord_name => Tuple(_get_array(coord_fr, allselectargs) for coord_fr in coord_fieldrecords) 
+                for (coord_name, coord_fieldrecords) in coords
+            ]
+
+            # replace coordinates
+            varray = update_coordinates(varray, vec_coord_arrays)
+        end
+    catch
+        frname = get(fr.attributes, :domain_name, "<none>")*"."*get(fr.attributes, :var_name, "<none>")
+        @warn "PALEOmodel.get_array(fr::FieldRecord) failed for variable $frname"
+        rethrow()
     end
 
     return varray
