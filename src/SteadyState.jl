@@ -724,6 +724,7 @@ function solve_ptc(
     tss = tss_initial
     deltat = deltat_initial
     previous_state = copy(initial_state)
+    step = zeros(length(initial_state))
         
     # record any initial state (eg state variables for short lived species)
     initial_inner_state = get_state(ssFJ!) # so we can reset before writing output
@@ -754,15 +755,20 @@ function solve_ptc(
             set_step!(ssFJ!, tss, deltat, previous_state, inner_state)
             sol = NLsolve.nlsolve(nldf, previous_state; solvekwargs...)
             
+            # NLsolve doesn't supply a diagnostic for the step taken so recalculate it ourselves
+            step .= sol.zero  .- previous_state
+            step_norm_inf, step_norm_2 = LinearAlgebra.norm(step, Inf), LinearAlgebra.norm(step, 2)
+            
             if verbose
                 @info """
                 
                 ================================================================================
                  * Algorithm: $(sol.method)
-                 * Inf-norm of residuals: $(sol.residual_norm)
                  * Iterations: $(sol.iterations)
                  * Convergence: $(NLsolve.converged(sol))
+                   * Step |x - x'| inf norm: $step_norm_inf 2-norm: $step_norm_2 
                    * |x - x'| < $(sol.xtol): $(sol.x_converged)
+                   * Residuals |f(x)| inf-norm: $(sol.residual_norm)
                    * |f(x)| < $(sol.ftol): $(sol.f_converged)
                  * Function Calls (f): $(sol.f_calls)
                  * Jacobian Calls (df/dx): $(sol.g_calls)
@@ -781,7 +787,7 @@ function solve_ptc(
                 sol_ok = sol_ok && cc(sol.zero, tss, deltat, model, modeldata)
             end
 
-            sol_progress = sol_ok && (sol.iterations > 0)
+            sol_progress = sol_ok && !iszero(step_norm_inf)
 
         catch e
             if isa(e, LinearAlgebra.SingularException)
