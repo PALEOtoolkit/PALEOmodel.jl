@@ -608,16 +608,19 @@ Solver options to pass through to the outer `NLsolve` nonlinear solver are set b
 
 # Keyword Arguments
 - `deltat_fac=2.0`: factor to increase pseudo-timestep on success
-- `tss_output=Float64[]`: Vector of model times at which to save output (empty Vector to save all output timesteps)
+- 'dtmax=Inf': maximum pseudo-timestep
+- `saveat=Float64[]`: Vector of model pseudo-times at which to save output (empty Vector to save all output timesteps)
 - `outputwriter=run.output`: container for output
 - `solvekwargs=NamedTuple()`: arguments to pass through to `NLsolve`
-- `max_iter=1000`: maximum number of PTC iterations
+- `maxiters=1000`: maximum number of PTC iterations
 - `max_failed_iter=20`: maximum number of iterations that make no progress (either fail, or no change in solution) before exiting
 - `check_callbacks=[]`: vector of callback functions to check validity of solution `[check_callback(sol, tss, deltat, model, modeldata)]`
 - `step_callbacks=[]`: vector of callback functions to follow a successful step `[step_callback(sol, tss, deltat, model, modeldata)]`, 
   eg to project solution onto invariant manifold [Shampine1999](@cite)
 - `verbose=false`: true for detailed output
 - `BLAS_num_threads=1`: restrict threads used by Julia BLAS (likely irrelevant if using sparse Jacobian?)
+- [Deprecated]: `tss_output=Float64[]`: renamed to 'saveat'
+- [Deprecated]: - `max_iter`: renamed to maxiters
 - [Deprecated: - `enforce_noneg=nothing`: true to fail pseudo-timesteps that generate negative values for state variables.]
 - [Deprecated: `use_norm=false`: not supported (must be false)]
 - [Deprecated: `sol_min`: now has no effect, replace with 
@@ -642,20 +645,32 @@ and should implement:
 function solve_ptc(
     run, initial_state, @nospecialize(nlsolveF), tspan, deltat_initial::Float64;
     deltat_fac=2.0,
-    tss_output=Float64[],
+    dtmax=Inf,
+    saveat=Float64[],
     outputwriter=run.output,
     @nospecialize(solvekwargs::NamedTuple=NamedTuple{}()),
-    max_iter=1000,
+    maxiters=1000,
     max_failed_iter=20,
     check_callbacks=[],
     step_callbacks=[],    
     verbose=false,    
     BLAS_num_threads=1,
+    tss_output=Float64[],  # deprecated
+    max_iter=nothing,
     enforce_noneg=nothing, # deprecated
     use_norm::Bool=false, # deprecated
     sol_min=nothing, # deprecated
 )
     # backwards compatibility checks
+    if !isempty(tss_output)
+        @warn "solve_ptc: 'tss_output' is deprecated, use 'saveat' instead"
+        isempty(saveat) || error("solve_ptc: both 'saveat' and 'tss_output' are set")
+        saveat=tss_output
+    end
+    if !isnothing(max_iter)
+        @warn "solve_ptc: 'max_iter' is deprecated, use 'maxiters' instead"
+        maxiters = max_iter
+    end
     isnothing(enforce_noneg) || @warn "solve_ptc: enforce_noneg is deprecated and will be ignored, use check_callbacks instead"
     !use_norm || ArgumentError("solve_ptc: use_norm=true not supported")
     isnothing(sol_min) || @warn "solve_ptc: 'sol_min' is deprecated and now has no effect: replace with 'solve_kwargs=(apply_step! = PALEOmodel.SolverFunctions.StepClampAll!(sol_min, Inf), )'"
@@ -682,8 +697,9 @@ function solve_ptc(
         tspan=$tspan
         deltat_initial=$deltat_initial
         deltat_fac=$deltat_fac
-        tss_output=$tss_output
-        max_iter=$max_iter
+        dtmax=$dtmax
+        saveat=$saveat
+        maxiters=$maxiters
         max_failed_iter=$max_failed_iter
         using BLAS with $(LinearAlgebra.BLAS.get_num_threads()) threads
     ================================================================================
@@ -693,17 +709,17 @@ function solve_ptc(
     # Vectors to accumulate solution at each pseudo-timestep
     #########################################################
   
-    # remove any tss_output prior to start time
-    tss_output_filtered = filter(x->x>=tss_initial, tss_output)
+    # remove any saveat prior to start time
+    saveat_filtered = filter(x->x>=tss_initial, saveat)
 
-    # Vectors to accumulate solution at requested tss_output_filtered
+    # Vectors to accumulate solution at requested saveat_filtered
     # first entry is initial state
     @info "    writing output record at initial time tmodel = $(tss_initial)"
-    iout = 1                            # tss_output_filtered[iout] is model time of next record to output
+    iout = 1                            # saveat_filtered[iout] is model time of next record to output
     tsoln = Float64[tss_initial]                       # output vector of pseudo-times
     soln = [copy(initial_state)]        # output vector of state vectors at each pseudo-time
     # Always write initial state as first entry (whether requested or not)
-    if !isempty(tss_output_filtered) && (tss_output_filtered[1] == tss_initial)
+    if !isempty(saveat_filtered) && (saveat_filtered[1] == tss_initial)
         # don't repeat initial state if that was requested
         iout += 1
     end
@@ -722,7 +738,7 @@ function solve_ptc(
 
     # current pseudo-timestep
     tss = tss_initial
-    deltat = deltat_initial
+    deltat = min(deltat_initial, dtmax)
     previous_state = copy(initial_state)
     step = zeros(length(initial_state))
         
@@ -733,11 +749,11 @@ function solve_ptc(
     ptc_iter = 1
     failed_iter = 0
     sol = nothing
-    @time while tss < tss_max && ptc_iter <= max_iter && failed_iter <= max_failed_iter
+    @time while tss < tss_max && ptc_iter <= maxiters && failed_iter <= max_failed_iter
         deltat_full = deltat  # keep track of the deltat we could have used
         deltat = min(deltat, tss_max - tss) # limit last timestep to get to tss_max
-        if iout <= length(tss_output_filtered)
-            deltat = min(deltat, tss_output_filtered[iout] - tss) # limit timestep to get to next requested output
+        if iout <= length(saveat_filtered)
+            deltat = min(deltat, saveat_filtered[iout] - tss) # limit timestep to get to next requested output
         end
 
         tss += deltat
@@ -805,17 +821,17 @@ function solve_ptc(
        
         if sol_ok
             # write output record, if required
-            # NB: test tss_output not tss_output_filtered, so we don't write every timestep if !isempty(tss_output) but all tss_output filtered out
-            if isempty(tss_output) ||                       # all records requested, or ...
-                (iout <= length(tss_output_filtered) &&                  # (not yet done last requested record
-                    tss >= tss_output_filtered[iout])                    # and just gone past a requested record)              
+            # NB: test saveat not saveat_filtered, so we don't write every timestep if !isempty(saveat) but all saveat filtered out
+            if isempty(saveat) ||                       # all records requested, or ...
+                (iout <= length(saveat_filtered) &&                  # (not yet done last requested record
+                    tss >= saveat_filtered[iout])                    # and just gone past a requested record)              
                 @info "    writing output record at tmodel = $(tss)"
                 push!(tsoln, tss)
                 push!(soln, copy(sol.zero))
                 iout += 1
             end
 
-            # record additional state (if any) from succesful step
+            # record additional state (if any) from successful step
             get_state!(inner_state, ssFJ!)
 
             # apply callbacks (if any). May modify state variables
@@ -833,6 +849,7 @@ function solve_ptc(
                 # we weren't using the full timestep as an output was requested, so go back to full
                 deltat = deltat_full
             end           
+            deltat = min(deltat, dtmax)
 
         else
             @warn "iter failed, reducing deltat"
@@ -849,7 +866,7 @@ function solve_ptc(
         ptc_iter += 1
     end
 
-    ptc_iter <= max_iter || @warn("     max iterations $max_iter exceeded")
+    ptc_iter <= maxiters || @warn("     max iterations $maxiters exceeded")
     failed_iter <= max_failed_iter || @warn("     max failed iterations $max_failed_iter exceeded")
     # always write the last record even if it wasn't explicitly requested
     if tsoln[end] != tss

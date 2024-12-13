@@ -15,7 +15,7 @@ using SparseDiffTools
 
 """
     steadystate_ptc(run, initial_state, modeldata, tspan, deltat_initial; 
-        [,deltat_fac=2.0] [,tss_output] [,outputwriter] [,createkwargs] [,solvekwargs]
+        [,deltat_fac=2.0] [,saveat] [,outputwriter] [,createkwargs] [,solvekwargs]
         [, use_jac_preconditioner] [,jac_cellranges] [, use_directional_ad] [, directional_ad_eltypestomap]
         [,verbose] [,  BLAS_num_threads]
     )
@@ -49,8 +49,8 @@ that should be mapped to the AD directional derivative datatype hence included i
 function steadystate_ptc(
     run, initial_state, modeldata, tspan, deltat_initial::Float64; 
     deltat_fac=2.0,
-    tss_output=[],
-    ptc_iter_max=1000,
+    saveat=Float64[],
+    maxiters=1000,
     outputwriter=run.output,
     createkwargs::NamedTuple=NamedTuple{}(), 
     solvekwargs::NamedTuple=NamedTuple{}(),
@@ -61,14 +61,23 @@ function steadystate_ptc(
     use_directional_ad=false,
     directional_ad_eltypestomap=String[],
     verbose=false,
-    BLAS_num_threads=1
+    BLAS_num_threads=1,
+    tss_output=Float64[], # deprecated
 )
+
+    # backwards compatibility checks
+    if !isempty(tss_output)
+        @warn "solve_ptc: 'tss_output' is deprecated, use 'saveat' instead"
+        isempty(saveat) || error("solve_ptc: both 'saveat' and 'tss_output' are set")
+        saveat=tss_output
+    end
+
     @info """
     
     ================================================================================
     PALEOmodel.SteadyStateKinsol.steadystate_ptc:
         tspan=$tspan
-        tss_output=$tss_output
+        saveat=$saveat
     ================================================================================
     """
   
@@ -227,12 +236,12 @@ function steadystate_ptc(
         createkwargs...
     )
 
-    # Vectors to accumulate solution at requested tss_output
+    # Vectors to accumulate solution at requested saveat
     # Always write initial state as first entry (whether requested or not)
     iout = 1
     tsoln = [userdata.tmodel[]]                       # vector of pseudo-times
     soln = [copy(userdata.current_state)]        # vector of state vectors at each pseudo-time
-    if !isempty(tss_output) && (tss_output[1] == userdata.tmodel[])
+    if !isempty(saveat) && (saveat[1] == userdata.tmodel[])
         # don't repeat initial state if that was requested
         iout += 1
     end
@@ -241,15 +250,15 @@ function steadystate_ptc(
     ptc_iter = 1
     sol = nothing
  
-    @time while userdata.tmodel[] < tss_max && ptc_iter <= ptc_iter_max
+    @time while userdata.tmodel[] < tss_max && ptc_iter <= maxiters
         # limit timestep if necessary, to get to next output
         # keep track of the deltat we could have used
         deltat_full = userdata.deltat[]  
         # limit last timestep to get to tss_max
         userdata.deltat[] = min(userdata.deltat[], tss_max - userdata.tmodel[]) 
-        if iout < length(tss_output)
+        if iout < length(saveat)
             # limit timestep to get to next requested output
-            userdata.deltat[] = min(userdata.deltat[], tss_output[iout] - userdata.tmodel[]) 
+            userdata.deltat[] = min(userdata.deltat[], saveat[iout] - userdata.tmodel[]) 
         end
 
         userdata.tmodel[] += userdata.deltat[]
@@ -300,9 +309,9 @@ function steadystate_ptc(
             
             userdata.current_state .= sol
       
-            if isempty(tss_output) ||                       # all records requested, or ...
-                    (iout <= length(tss_output) &&              # (not yet done last requested record
-                    userdata.tmodel[] >= tss_output[iout])      # and just gone past a requested record)              
+            if isempty(saveat) ||                       # all records requested, or ...
+                    (iout <= length(saveat) &&              # (not yet done last requested record
+                    userdata.tmodel[] >= saveat[iout])      # and just gone past a requested record)              
                 @info "    writing output record at tmodel = $(userdata.tmodel[])"
                 push!(tsoln, userdata.tmodel[])
                 push!(soln, copy(userdata.current_state))
@@ -317,8 +326,8 @@ function steadystate_ptc(
         ptc_iter += 1
     end
 
-    ptc_iter <= ptc_iter_max ||
-        @warn "    max ptc iters $ptc_iter_max exceeded"
+    ptc_iter <= maxiters ||
+        @warn "    max ptc iters $maxiters exceeded"
 
     # always write the last record even if it wasn't explicitly requested
     if tsoln[end] != userdata.tmodel[]
