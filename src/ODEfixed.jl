@@ -165,9 +165,9 @@ function integrateEulerthreads(
     PB.check_modeldata(run.model, modeldata)
 
     nt = Threads.nthreads()
-    nt == 1 || modeldata.threadsafe || 
-        error("integrateEulerthreads: Threads.nthreads() = $nt but modeldata is not thread safe "*
-            "(check initialize!(run.model, ...))")
+    nt == 1 || get(modeldata.model.parameters, "threadsafe", false)  || 
+        error("integrateEulerthreads: Threads.nthreads() = $nt but model is not thread safe "*
+            "(set 'threadsafe=true' in YAML config top-level 'parameters:')")
 
     lc = length(cellranges)
     lc == nt ||
@@ -242,8 +242,9 @@ function integrateSplitEulerthreads(
     PB.check_modeldata(run.model, modeldata)
 
     nt = Threads.nthreads()
-    nt == 1 || modeldata.threadsafe || 
-        error("integrateEulerthreads: Threads.nthreads() = $nt but modeldata is not thread safe (check initialize!(run::Run, ...))")
+    nt == 1 || get(modeldata.model.parameters, "threadsafe", false)  || 
+        error("integrateSplitEulerthreads: Threads.nthreads() = $nt but model is not thread safe "*
+            "(set 'threadsafe=true' in YAML config top-level 'parameters:')")
 
     lc_outer = length(cellranges_outer)
     lc_outer == nt || 

@@ -21,16 +21,21 @@ the `:datatype` Variable attribute to specify `String`-valued tags, in combinati
 provide a `Dict` of tag names => `DataType`s. 
 
 # Thread safety
-A thread-safe model can be created with `threadsafe=true` (to create Atomic Variables for those Variables with attribute `:atomic==true`),
-and supplying `method_barrier` (a thread barrier to add to `ReactionMethod` dispatch lists between dependency-free groups)
+A thread-safe model can be created by setting the `threadsafe=true` global parameter in the YAML config file before calling `PB.create_model_from_config` 
+(used by Reactions that require eg special handling of global accumulator variables to maintain thread safety),
+and supplying `method_barrier` (a thread barrier to add to `ReactionMethod` dispatch lists between dependency-free groups):
+
+    method_barrier = PB.reaction_method_thread_barrier(
+        PALEOmodel.ThreadBarriers.ThreadBarrierAtomic("the barrier"),
+        PALEOmodel.ThreadBarriers.wait_barrier
+    )
 
 # Keyword summary
 - `pickup_output=nothing`: OutputWriter with pickup data to initialise from
 - `check_units_opt=:no`: check linked Variable units are consistent (:no to disable check, :warn to warn and continue, :error to error and stop)
 - `eltype::Type=Float64`: default data type to use for model arrays
 - `eltypemap=Dict{String, DataType}()`: Dict of data types to look up Variable :datatype attribute
-- `threadsafe=false`: true to create thread safe Atomic Variables where Variable attribute `:atomic==true`
-- `method_barrier=nothing`: thread barrier to add to dispatch lists if `threadsafe==true`
+- `method_barrier=nothing`: thread barrier to add to dispatch lists to create a thread-safe model
 - `expect_hostdep_varnames=["global.tforce"]`: non-state-Variable host-dependent Variable names expected
 - `SolverView_all=true`: `true` to create `modeldata.solver_view_all`
 - `create_dispatchlists_all=true`: `true` to create `modeldata.dispatchlists_all`
@@ -42,13 +47,7 @@ function initialize!(
     check_units_opt=:no,
     eltype=Float64,
     eltypemap=Dict{String, DataType}(),     
-    threadsafe=false,
-    method_barrier=threadsafe ? 
-        PB.reaction_method_thread_barrier(
-            PALEOmodel.ThreadBarriers.ThreadBarrierAtomic("the barrier"),
-            PALEOmodel.ThreadBarriers.wait_barrier
-        ) : 
-        nothing,
+    method_barrier=nothing,
     expect_hostdep_varnames=["global.tforce"],
     SolverView_all=true,
     create_dispatchlists_all=true,
@@ -64,7 +63,7 @@ function initialize!(
     # check Variable linking early and exit if problems, so user sees appropriate error not a downstream consequence when allocating variable etc
     PB.check_variable_links(model; throw_on_error=true, expect_hostdep_varnames)
 
-    modeldata = PB.create_modeldata(model, eltype; threadsafe)
+    modeldata = PB.create_modeldata(model, eltype)
    
     # Allocate variables
     @timeit "allocate_variables" PB.allocate_variables!(model, modeldata, 1; eltypemap, check_units_opt)
