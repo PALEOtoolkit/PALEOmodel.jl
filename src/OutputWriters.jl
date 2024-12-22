@@ -1127,9 +1127,17 @@ field_data_to_netcdf(field_data::Type{PB.IsotopeLinear}, x) = (x.v, x.v_delta)
 field_data_to_netcdf(field_data::Type{PB.IsotopeLinear}, ::Missing) = (missing, missing)
 function field_data_to_netcdf(field_data::Type{PB.IsotopeLinear}, x::Array{T}) where {T}
 
-    # strip Missing, find out datatype, replace Missing
-    isotopelinear_datatype(x::Type{PB.IsotopeLinear{T, T}}) where {T} = T
-    OutEltype = Union{Missing, isotopelinear_datatype(nonmissingtype(T))}
+    
+    isotopelinear_datatype(x::Type{PB.IsotopeLinear{ILT, ILT}}) where {ILT} = ILT
+
+    # strip Missing from x, find out datatype, replace Missing for xout
+    nelt = nonmissingtype(T)
+    ondt = isotopelinear_datatype(nelt)
+    if nelt == T # no missing in x
+        OutEltype = ondt
+    else # x contained missing
+        OutEltype = Union{Missing, ondt}
+    end
 
     # add extra first dimension
     xout = Array{OutEltype}(undef, (2, size(x)...))
@@ -1144,11 +1152,12 @@ netcdf_to_field_data(x, field_data::Type{<:PB.AbstractData}) = x # fallback
 # julia> PALEOmodel.OutputWriters.netcdf_to_field_data([1.0, 2.0], PB.IsotopeLinear)
 # (v=1.0, v_moldelta=2.0, ‰=2.0)
 #
-# julia> x = [1.0 3.0; 2.0 4.0]
+# julia> x = [1.0 3.0 missing; 2.0 4.0 missing]
 # julia> xout = PALEOmodel.OutputWriters.netcdf_to_field_data(x, PB.IsotopeLinear)
-# 2-element Vector{PALEOboxes.IsotopeLinear{Float64, Float64}}:
-#  (v=1.0, v_moldelta=2.0, ‰=2.0)
-#  (v=3.0, v_moldelta=12.0, ‰=4.0)
+# 3-element Vector{Union{Missing, PALEOboxes.IsotopeLinear{Float64, Float64}}}:
+# (v=1.0, v_moldelta=2.0, ‰=2.0)
+# (v=3.0, v_moldelta=12.0, ‰=4.0)
+# missing
 function netcdf_to_field_data(x, field_data::Type{PB.IsotopeLinear})
     # first dimension is two components of IsotopeLinear
     first(size(x)) == 2 || error("netcdf_to_field_data IsotopeLinear has wrong first dimension (should be 2)")
@@ -1157,9 +1166,20 @@ function netcdf_to_field_data(x, field_data::Type{PB.IsotopeLinear})
         xout = PB.IsotopeLinear(x[1], x[1]*x[2])
     else
         sz = size(x)[2:end] # strip first dimension
-        xout = Array{PB.IsotopeLinear{eltype(x), eltype(x)}}(undef, sz...)
+        # x may have missing values - recreate these "outside" IsotopeLinear type
+        nelt = nonmissingtype(eltype(x))
+        if nelt == eltype(x)
+            xout_eltype = PB.IsotopeLinear{nelt, nelt}
+        else
+            xout_eltype = Union{Missing, PB.IsotopeLinear{nelt, nelt}}
+        end
+        xout = Array{xout_eltype}(undef, sz...)
         for i in CartesianIndices(xout)
-            xout[i] = PB.IsotopeLinear(x[1, i], x[1, i]*x[2, i])
+            if any(ismissing.(x[:, i]))
+                xout[i] = missing
+            else
+                xout[i] = PB.IsotopeLinear(x[1, i], x[1, i]*x[2, i])
+            end
         end
     end
 
