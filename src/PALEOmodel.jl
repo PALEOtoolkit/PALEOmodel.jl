@@ -62,9 +62,7 @@ include("SteadyState.jl")
 
 include("SteadyStateKinsol.jl")
 
-include("CoordsDims.jl") # TODO
-
-include("Regions.jl") # TODO
+include("CoordsDims.jl") 
 
 include("FieldArray.jl")
 
