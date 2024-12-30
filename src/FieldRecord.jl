@@ -16,6 +16,16 @@ struct FieldRecord{FieldData <: PB.AbstractData, Space <: PB.AbstractSpace, V, N
     attributes::Dict{Symbol, Any}
 end
 
+function Base.getproperty(fr::FieldRecord, p::Symbol)
+    if p == :name
+        return get(fr.attributes, :var_name, "")        
+    else
+        return getfield(fr, p)
+    end
+end
+
+Base.propertynames(fr::FieldRecord) = (:name, fieldnames(typeof(fr))...)
+
 # create empty FieldRecord
 function FieldRecord(
     dataset, f::PB.Field{FieldData, Space, V, N, Mesh}, attributes;
@@ -67,12 +77,37 @@ function FieldRecord(
     )
 end
 
+# create a new copy of a FieldRecord, with new dataset, copying records and attributes and updating mesh, attributes[:domain]
+function FieldRecord(
+    fr::FieldRecord{FieldData, Space, V, N, Mesh, R}, dataset;
+    mesh = dataset.grid,
+    domain::AbstractString = dataset.name,
+) where {FieldData, Space, V, N, Mesh, R}
+    new_attributes = deepcopy(fr.attributes)
+    new_attributes[:domain_name] = domain
+    return FieldRecord{FieldData, Space, V, N, Mesh, R}(
+        dataset,
+        deepcopy(fr.records),
+        fr.data_dims,
+        mesh,
+        new_attributes,
+    )
+end
+
 space(fr::FieldRecord{FieldData, Space, V, N, Mesh, R}) where {FieldData, Space, V, N, Mesh, R} = Space
 
 function PB.get_dimensions(fr::FieldRecord; expand_cartesian=false)
     dims_spatial = PB.get_dimensions(fr.mesh, space(fr); expand_cartesian)
     dims = [dims_spatial..., fr.data_dims..., PB.NamedDimension(fr.dataset.record_dim.name, length(fr))]
     return dims
+end
+
+function PB.get_dimension(fr::FieldRecord, dimname::AbstractString; expand_cartesian=false)
+    dims = PB.get_dimensions(fr; expand_cartesian)
+    idx = findfirst(d -> d.name==dimname, dims)
+    !isnothing(idx) ||
+            error("no dimension='$dimname' (available dimensions: $dims")
+    return dims[idx]
 end
 
 function PB.get_coordinates(fr::FieldRecord, dimname::AbstractString; expand_cartesian=false)
@@ -89,15 +124,12 @@ function PB.get_coordinates(fr::FieldRecord, dimname::AbstractString; expand_car
 end
 
 function Base.show(io::IO, fr::FieldRecord)
-    print(io, 
-        "FieldRecord(eltype=", eltype(fr),", length=", length(fr), 
-        ", attributes=", fr.attributes, 
-        ")"
-    )
+    print(io, "FieldRecord(name='", fr.name, "', eltype=", eltype(fr),", length=", length(fr), ")",)
 end
 
-function Base.show(io::IO, ::MIME"text/plain", fr::FieldRecord)
-    println(io, "FieldRecord(eltype=", eltype(fr),", length=", length(fr), ")")
+function Base.show(io::IO, ::MIME"text/plain", @nospecialize(fr::FieldRecord))
+    show(io, fr)
+    println()
     # println(io, "  records: ", fr.records)
     println(io, "  data_dims: ", fr.data_dims)
     println(io, "  mesh: ", fr.mesh)
@@ -176,11 +208,11 @@ Base.lastindex(fr::FieldRecord) = lastindex(fr.records)
 
 function Base.copy(fr::FieldRecord{FieldData, Space, V, N, Mesh, R}) where {FieldData, Space, V, N, Mesh, R}
     return FieldRecord{FieldData, Space, V, N, Mesh, R}(
+        fr.dataset,
         deepcopy(fr.records),
         fr.data_dims,
         fr.mesh,
         deepcopy(fr.attributes),
-        copy(fr.coords_record),
     )
 end
 
@@ -211,7 +243,7 @@ eg to replace a 1D column default pressure coordinate with a z coordinate:
 
 """
 function get_array(
-    fr::FieldRecord; 
+    @nospecialize(fr::FieldRecord); 
     coords=nothing,
     allselectargs...
 )
@@ -226,196 +258,203 @@ end
 
 
 function get_array(
-    fr::FieldRecord, allselectargs::NamedTuple; # allselectargs::NamedTuple=NamedTuple() creates a method ambiguity with deprecated form above
+    @nospecialize(fr::FieldRecord), @nospecialize(allselectargs::NamedTuple); # allselectargs::NamedTuple=NamedTuple() creates a method ambiguity with deprecated form above
     coords=nothing,
     expand_cartesian=false, # can be overridden in allselectargs
     squeeze_all_single_dims=true, # can be overridden in allselectargs
     verbose=false,
 )
-    frname = default_fieldarray_name(fr.attributes)
-
-    verbose && @info "get_array (begin): $frname, allselectargs $allselectargs"
-   
-    if !isnothing(coords)
-        check_coords_argument(coords) ||
-            error("argument coords should be a Vector of Pairs of \"dim_name\"=>(\"var_name1\", \"var_name2\", ...), eg: [\"z\"=>(\"atm.zmid\", \"atm.zlower\", \"atm.zupper\"), ...]")
-    end
-
-    ##########################################################################
-    # preprocess allselectargs to strip non-selection arguments and fix quirks
-    ########################################################################
-    allselectargs_sort = [String(k) => v for (k, v) in pairs(allselectargs)]
+    frname = default_varnamefull(fr.attributes; include_selectargs=true)
+    fa = nothing 
+    try
+        verbose && @info "get_array (begin): $frname, allselectargs $allselectargs"
     
-    # override expand_cartesian
-    idx_expand_cartesian = findfirst(x-> x[1] == "expand_cartesian", allselectargs_sort)
-    if !isnothing(idx_expand_cartesian)
-        _, expand_cartesian = popat!(allselectargs_sort, idx_expand_cartesian)
-    end
-    # override squeeze_all_single_dims
-    idx_squeeze_all_single_dims = findfirst(x-> x[1] == "squeeze_all_single_dims", allselectargs_sort)
-    if !isnothing(idx_squeeze_all_single_dims)
-        _, squeeze_all_single_dims = popat!(allselectargs_sort, idx_squeeze_all_single_dims)
-    end
-
-    # quirk: column must precede cell selection, so move to front if present
-    idx_column = findfirst(x-> x[1] == "column", allselectargs_sort)
-    if !isnothing(idx_column)
-        column_select = popat!(allselectargs_sort, idx_column)
-        pushfirst!(allselectargs_sort, column_select)
-    end
-
-    selectargs_used = fill(false, length(allselectargs_sort))
-
-    ################################################################
-    # read dimensions 
-    # (TODO reproduce code from get_dimensions so we can also get dims_spatial)
-    ##########################################################
-    # order is spatial (from grid), data_dims, then record dimension
-    dims_spatial = PB.get_dimensions(fr.mesh, space(fr); expand_cartesian)
-    dims = [dims_spatial..., fr.data_dims..., PB.NamedDimension(fr.dataset.record_dim.name, length(fr))]
-    recorddimidx = length(dims)
-
-    ##################################################################################
-    # Read coordinates and apply selection: record dimension first, followed by non-record dimensions
-    # so we can handle the case where a single record is selected and coordinates are not constant.
-    # TODO this doesn't handle cases where multiple records are used with non-constant coordinates
-    ##########################################################################################
-
-    # vector of filtered dim => coords corresponding to select_indices, nothing if dimension squeezed out
-    dims_coords = Vector{Any}(undef, length(dims))
-    # indices in full array to use. Start with everything, then apply selections from 'allselectargs'
-    select_indices = Any[1:(nd.size) for nd in dims]
-
-    # Record dimension
-
-    # read record coordinates
-    dims_coords[recorddimidx] = dims[recorddimidx] => _read_coordinates(
-        fr, dims[recorddimidx], nothing, expand_cartesian; substitute_coords=coords
-    )
-    
-    # keep track of selection used, to provide as attributes in FieldArray
-    selectargs_records = OrderedCollections.OrderedDict()
-    
-    _filter_dims_coords(
-        select_indices, dims_coords, recorddimidx, 
-        allselectargs_sort, selectargs_used,  selectargs_records,
-        fr,
-    )
-
-    # get record indices to use
-    ridx_to_use = select_indices[recorddimidx]
-    have_recorddim = !isnothing(dims_coords[recorddimidx])
-
-    # Non-record dimensions
-
-    # read non-record coordinates, from first record selected
-    for i in 1:(length(dims)-1)
-        dims_coords[i] = dims[i] => _read_coordinates(fr, dims[i], first(ridx_to_use), expand_cartesian; substitute_coords=coords)
-    end
-
-    selectargs_region = OrderedCollections.OrderedDict()
-
-    _filter_dims_coords(
-        select_indices, dims_coords, 1:length(dims)-1, 
-        allselectargs_sort, selectargs_used,  selectargs_region,
-        fr,
-    )    
-
-    unused_selectargs = [a for (a, u) in zip(allselectargs_sort, selectargs_used) if !u]
-    isempty(unused_selectargs) ||
-        error("allselectargs contains select filter(s) $unused_selectargs that do not match any dimensions or coordinates !")
-
-    #############################################
-    # squeeze out dimensions and coordinates
-    #############################################
-
-    # selections that produce a dimension with a single index are already squeezed out,
-    # but not dimensions that started with a single index and haven't had a selection applied
-    if squeeze_all_single_dims
-        for i in eachindex(dims_coords, select_indices)
-            if !isnothing(dims_coords[i]) && dims_coords[i][1].size == 1
-                @info "get_array: $frname squeezing out dimension $(dims_coords[i][1].name)"
-                @assert !isa(select_indices[i], Number)
-                @assert length(select_indices[i]) == 1
-                dims_coords[i] = nothing
-                select_indices[i] = first(select_indices[i])
-            end
+        if !isnothing(coords)
+            check_coords_argument(coords) ||
+                error("argument coords should be a Vector of Pairs of \"dim_name\"=>(\"var_name1\", \"var_name2\", ...), eg: [\"z\"=>(\"atm.zmid\", \"atm.zlower\", \"atm.zupper\"), ...]")
         end
-    end
 
-    dims_coords_sq = Pair{PB.NamedDimension, Vector{PALEOmodel.FixedCoord}}[dc for dc in dims_coords if !isnothing(dc)]
-    dims_sq = [d for (d, c) in dims_coords_sq]
-
-    # get non-record dimensions indices to use
-    nonrecordindicies = select_indices[1:end-1]
-    # squeeze out single dimensions by filtering out scalars in nonrecordindicies
-    # NB: lhs (assignment to output array) is contiguous !
-    nonrecordindicies_sq = [1:length(nri) for nri in nonrecordindicies if nri isa AbstractVector]
-    # consistency check between dimensions and indices of output array
-    @assert length(dims_sq) == length(nonrecordindicies_sq) + have_recorddim
-    for (d_sq, nri_sq) in zip(dims_sq, nonrecordindicies_sq) # will stop after shortest iter and so skip recorddim if present 
-        @assert d_sq.size == length(nri_sq)
-    end
-
-    ###############################################
-    # create output FieldArray
-    ###############################################
-
-    # create values array
-    if field_single_element(fr)
-        if have_recorddim
-            avalues = fr.records[ridx_to_use]
-        else
-            # represent a scalar as a 0D Array
-            avalues = Array{eltype(fr.records), 0}(undef)
-            avalues[] = fr.records[ridx_to_use]
+        ##########################################################################
+        # preprocess allselectargs to strip non-selection arguments and fix quirks
+        ########################################################################
+        allselectargs_sort = [String(k) => v for (k, v) in pairs(allselectargs)]
+        
+        # override expand_cartesian
+        idx_expand_cartesian = findfirst(x-> x[1] == "expand_cartesian", allselectargs_sort)
+        if !isnothing(idx_expand_cartesian)
+            _, expand_cartesian = popat!(allselectargs_sort, idx_expand_cartesian)
         end
-    else        
-        if expand_cartesian && !isempty(dims_spatial)
-            expand_fn = x -> PB.Grids.internal_to_cartesian(fr.mesh, x)
-            aeltype = Union{Missing, eltype(first(fr.records))}
-        else
-            expand_fn = identity
-            aeltype = eltype(first(fr.records))
+        # override squeeze_all_single_dims
+        idx_squeeze_all_single_dims = findfirst(x-> x[1] == "squeeze_all_single_dims", allselectargs_sort)
+        if !isnothing(idx_squeeze_all_single_dims)
+            _, squeeze_all_single_dims = popat!(allselectargs_sort, idx_squeeze_all_single_dims)
         end
-        avalues = Array{aeltype, length(dims_sq)}(undef, [nd.size for nd in dims_sq]...)
-        if have_recorddim            
-            for (riselect, ri) in enumerate(ridx_to_use)
-                if isempty(nonrecordindicies_sq)
-                    avalues[riselect] = expand_fn(fr.records[ri])[nonrecordindicies...]
-                else
-                    avalues[nonrecordindicies_sq..., riselect] .= expand_fn(fr.records[ri])[nonrecordindicies...]
+
+        # quirk: column must precede cell selection, so move to front if present
+        idx_column = findfirst(x-> x[1] == "column", allselectargs_sort)
+        if !isnothing(idx_column)
+            column_select = popat!(allselectargs_sort, idx_column)
+            pushfirst!(allselectargs_sort, column_select)
+        end
+
+        selectargs_used = fill(false, length(allselectargs_sort))
+
+        ################################################################
+        # read dimensions 
+        # (TODO reproduce code from get_dimensions so we can also get dims_spatial)
+        ##########################################################
+        # order is spatial (from grid), data_dims, then record dimension
+        dims_spatial = PB.get_dimensions(fr.mesh, space(fr); expand_cartesian)
+        dims = [dims_spatial..., fr.data_dims..., PB.NamedDimension(fr.dataset.record_dim.name, length(fr))]
+        recorddimidx = length(dims)
+
+        ##################################################################################
+        # Read coordinates and apply selection: record dimension first, followed by non-record dimensions
+        # so we can handle the case where a single record is selected and coordinates are not constant.
+        # TODO this doesn't handle cases where multiple records are used with non-constant coordinates
+        ##########################################################################################
+
+        # vector of filtered dim => coords corresponding to select_indices, nothing if dimension squeezed out
+        dims_coords = Vector{Any}(undef, length(dims))
+        # indices in full array to use. Start with everything, then apply selections from 'allselectargs'
+        select_indices = Any[1:(nd.size) for nd in dims]
+
+        # Record dimension
+
+        # read record coordinates
+        dims_coords[recorddimidx] = dims[recorddimidx] => _read_coordinates(
+            fr, dims[recorddimidx], nothing, expand_cartesian; substitute_coords=coords
+        )
+        
+        # keep track of selection used, to provide as attributes in FieldArray
+        selectargs_records = OrderedCollections.OrderedDict()
+        
+        _filter_dims_coords(
+            select_indices, dims_coords, recorddimidx, 
+            allselectargs_sort, selectargs_used,  selectargs_records,
+            fr,
+        )
+
+        # get record indices to use
+        ridx_to_use = select_indices[recorddimidx]
+        have_recorddim = !isnothing(dims_coords[recorddimidx])
+
+        # Non-record dimensions
+
+        # read non-record coordinates, from first record selected
+        for i in 1:(length(dims)-1)
+            dims_coords[i] = dims[i] => _read_coordinates(fr, dims[i], first(ridx_to_use), expand_cartesian; substitute_coords=coords)
+        end
+
+        selectargs_region = OrderedCollections.OrderedDict()
+
+        _filter_dims_coords(
+            select_indices, dims_coords, 1:length(dims)-1, 
+            allselectargs_sort, selectargs_used,  selectargs_region,
+            fr,
+        )    
+
+        unused_selectargs = [a for (a, u) in zip(allselectargs_sort, selectargs_used) if !u]
+        isempty(unused_selectargs) ||
+            error("allselectargs contains select filter(s) $unused_selectargs that do not match any dimensions or coordinates !")
+
+        #############################################
+        # squeeze out dimensions and coordinates
+        #############################################
+
+        # selections that produce a dimension with a single index are already squeezed out,
+        # but not dimensions that started with a single index and haven't had a selection applied
+        if squeeze_all_single_dims
+            for i in eachindex(dims_coords, select_indices)
+                if !isnothing(dims_coords[i]) && dims_coords[i][1].size == 1
+                    verbose && @info "get_array: $frname squeezing out dimension $(dims_coords[i][1].name)"
+                    @assert !isa(select_indices[i], Number)
+                    @assert length(select_indices[i]) == 1
+                    dims_coords[i] = nothing
+                    select_indices[i] = first(select_indices[i])
                 end
             end
-        else
-            if isempty(nonrecordindicies_sq)
-                avalues[] = expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
+        end
+
+        dims_coords_sq = Pair{PB.NamedDimension, Vector{PALEOmodel.FixedCoord}}[dc for dc in dims_coords if !isnothing(dc)]
+        dims_sq = [d for (d, c) in dims_coords_sq]
+
+        # get non-record dimensions indices to use
+        nonrecordindicies = select_indices[1:end-1]
+        # squeeze out single dimensions by filtering out scalars in nonrecordindicies
+        # NB: lhs (assignment to output array) is contiguous !
+        nonrecordindicies_sq = [1:length(nri) for nri in nonrecordindicies if nri isa AbstractVector]
+        # consistency check between dimensions and indices of output array
+        @assert length(dims_sq) == length(nonrecordindicies_sq) + have_recorddim
+        for (d_sq, nri_sq) in zip(dims_sq, nonrecordindicies_sq) # will stop after shortest iter and so skip recorddim if present 
+            @assert d_sq.size == length(nri_sq)
+        end
+
+        ###############################################
+        # create output FieldArray
+        ###############################################
+
+        # create values array
+        if field_single_element(fr)
+            if have_recorddim
+                avalues = fr.records[ridx_to_use]
             else
-                avalues[nonrecordindicies_sq...] .= expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
+                # represent a scalar as a 0D Array
+                avalues = Array{eltype(fr.records), 0}(undef)
+                avalues[] = fr.records[ridx_to_use]
+            end
+        else        
+            if expand_cartesian && !isempty(dims_spatial)
+                expand_fn = x -> PB.Grids.internal_to_cartesian(fr.mesh, x)
+                aeltype = Union{Missing, eltype(first(fr.records))}
+            else
+                expand_fn = identity
+                aeltype = eltype(first(fr.records))
+            end
+            avalues = Array{aeltype, length(dims_sq)}(undef, [nd.size for nd in dims_sq]...)
+            if have_recorddim            
+                for (riselect, ri) in enumerate(ridx_to_use)
+                    if isempty(nonrecordindicies_sq)
+                        avalues[riselect] = expand_fn(fr.records[ri])[nonrecordindicies...]
+                    else
+                        avalues[nonrecordindicies_sq..., riselect] .= expand_fn(fr.records[ri])[nonrecordindicies...]
+                    end
+                end
+            else
+                if isempty(nonrecordindicies_sq)
+                    avalues[] = expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
+                else
+                    avalues[nonrecordindicies_sq...] .= expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
+                end
             end
         end
-    end
-    
-    # add attributes for selection used
-    attributes = copy(fr.attributes)
-    if !isempty(selectargs_records)
-        attributes[:filter_records] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_records)
-    end
-    if !isempty(selectargs_region)
-        attributes[:filter_region] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_region)
+        
+        # add attributes for selection used
+        attributes = copy(fr.attributes)
+        if !isempty(selectargs_records)
+            attributes[:filter_records] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_records)
+        end
+        if !isempty(selectargs_region)
+            attributes[:filter_region] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_region)
+        end
+
+        # Generate name from attributes, including selection suffixes
+        name = default_varnamefull(attributes; include_selectargs=true)
+
+        verbose && @info "get_array (end): $frname -> $name, allselectargs $allselectargs"
+
+        fa = FieldArray(
+            name,
+            avalues,
+            dims_coords_sq,
+            attributes,
+        )
+    catch
+        @error "get_array exception: $frname, allselectargs $allselectargs"
+        rethrow()
     end
 
-    # Generate name from attributes, including selection suffixes
-    name = default_fieldarray_name(attributes)
-
-    verbose && @info "get_array (end): $frname -> $name, allselectargs $allselectargs"
-
-    return FieldArray(
-        name,
-        avalues,
-        dims_coords_sq,
-        attributes,
-    )
+    return fa
 end
 
 # check 'coords' of form [] or ["z"=>[ ... ], ] or ["z"=>(...),]

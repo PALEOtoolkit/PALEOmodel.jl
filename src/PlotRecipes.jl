@@ -231,7 +231,7 @@ Example: to replace a 1D column default pressure coordinate with a z coordinate:
     coords=["z"=>("atm.zmid", "atm.zlower", "atm.zupper")]
 
 """
-RecipesBase.@recipe function f(fr::FieldRecord, selectargs::NamedTuple, coords=nothing)
+RecipesBase.@recipe function f(@nospecialize(fr::FieldRecord), selectargs::NamedTuple, coords=nothing)
 
     # broadcast any Vector-valued argument in selectargs
     bcastargs = broadcast_dict([Dict{Symbol, Any}(pairs(selectargs))])

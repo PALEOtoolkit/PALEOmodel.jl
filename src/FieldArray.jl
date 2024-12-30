@@ -48,19 +48,21 @@ end
 Base.:*(a::Real, fa_in::FieldArray) = fa_in*a
 
 # default name from attributes
-default_fieldarray_name(attributes::Nothing) = ""
+default_varnamefull(attributes::Nothing) = ""
 
-function default_fieldarray_name(attributes::Dict)
+function default_varnamefull(attributes::Dict; include_selectargs=false)
     name = get(attributes, :domain_name, "")
     name *= isempty(name) ? "" : "."
     name *= get(attributes, :var_name, "")
 
-    selectargs_records = get(attributes, :filter_records, NamedTuple())
-    selectargs_region = get(attributes, :filter_region, NamedTuple())
-    if !isempty(selectargs_region) || !isempty(selectargs_records)
-        name *= "(" * join(["$k=$v" for (k, v) in Dict(pairs(merge(selectargs_records, selectargs_region)))], ", ") * ")"
+    if include_selectargs
+        selectargs_records = get(attributes, :filter_records, NamedTuple())
+        selectargs_region = get(attributes, :filter_region, NamedTuple())
+        if !isempty(selectargs_region) || !isempty(selectargs_records)
+            name *= "(" * join(["$k=$v" for (k, v) in Dict(pairs(merge(selectargs_records, selectargs_region)))], ", ") * ")"
+        end
     end
-    
+
     return name
 end
 

@@ -51,11 +51,11 @@ PALEOmodel.AbstractOutputWriter
 
 """
     initialize!(
-        output::PALEOmodel.AbstractOutputWriter, model, modeldata, nrecords 
+        output::PALEOmodel.AbstractOutputWriter, model, modeldata, [nrecords] 
         [;record_dim_name=:tmodel] [record_coord_units="yr"]
     )
 
-Initialize from a PALEOboxes::Model, reserving memory for an assumed output dataset of `nrecords`.
+Initialize from a PALEOboxes::Model, optionally reserving memory for an assumed output dataset of `nrecords`.
 
 The default for `record_dim_name` is `:tmodel`, for a sequence of records following the time evolution
 of the model.
@@ -221,7 +221,7 @@ end
 """
     OutputMemoryDomain(
         name::AbstractString; 
-        [record_dim_name::Symbol=:tmodel]
+        [record_dim_name::Symbol=:tmodel], [record_coord_name::Symbol=record_dim_name]
         [grid=nothing]
         [data_dims::Vector{PB.NamedDimension} = Vector{PB.NamedDimension}()]
     )
@@ -263,7 +263,7 @@ Base.length(output::OutputMemoryDomain) = output.record_dim.size
 
 "create from a PALEOboxes::Domain"
 function OutputMemoryDomain(
-    dom::PB.Domain, modeldata::PB.ModelData; 
+    dom::PB.Domain, modeldata::PB.ModelData, nrecords=nothing; 
     parentdataset=nothing,
     record_dim_name::Symbol=:tmodel,
     record_coord_name::Symbol=record_dim_name,
@@ -307,7 +307,7 @@ function OutputMemoryDomain(
             :data_dims => (),
             :units => record_coord_units,
         ),
-    ) 
+    )
 
     # create list of variables sorted by host dependent type, then by name
     odom._all_vars = vcat(
@@ -346,6 +346,35 @@ function OutputMemoryDomain(
         end
     end
 
+    if !isnothing(nrecords)
+        for (_, fr) in odom.data
+            sizehint!(fr.records, nrecords)
+        end
+    end
+
+    return odom
+end
+
+# create from a record coordinate FieldRecord
+function OutputMemoryDomain(
+    name::AbstractString, record_coordinate::PALEOmodel.FieldRecord;
+    parentdataset=nothing,
+    data_dims::Vector{PB.NamedDimension} = Vector{PB.NamedDimension}(),
+    data_dims_coordinates::Dict{String, Vector{String}} = Dict{String, Vector{String}}(),
+    grid = nothing,
+)
+    record_dim_name = Symbol(record_coordinate.attributes[:var_name])
+    record_coord_name = record_dim_name
+    odom = OutputMemoryDomain(
+        name; 
+        record_dim_name,
+        record_coord_name,
+        parentdataset, data_dims, data_dims_coordinates, grid
+    )
+
+    odom.record_dim = PB.NamedDimension(string(record_dim_name), length(record_coordinate))
+    PB.add_field!(odom, record_coordinate)
+    
     return odom
 end
 
@@ -404,7 +433,6 @@ function OutputMemoryDomain(
     return odom
 end
 
-
 function add_record!(odom::OutputMemoryDomain, modeldata, rec_coord)
         
     odom.record_dim = PB.NamedDimension(odom.record_dim.name, odom.record_dim.size + 1)
@@ -431,13 +459,12 @@ function PB.add_field!(odom::OutputMemoryDomain, fr::PALEOmodel.FieldRecord)
     length(fr) == length(odom) ||
         throw(ArgumentError("FieldRecord length $(length(fr)) != OutputMemoryDomain length $(length(odom))"))
 
-    haskey(fr.attributes, :var_name) ||
-        throw(ArgumentError("FieldRecord has no :var_name attribute"))
-    varname = fr.attributes[:var_name]
-    !(Symbol(varname) in keys(odom.data)) ||
-        throw(ArgumentError("Variable $varname already exists"))
+    !isempty(fr.name) ||
+        throw(ArgumentError("FieldRecord has empty name = \"\""))
+    !(Symbol(fr.name) in keys(odom.data)) ||
+        throw(ArgumentError("Variable $(fr.name) already exists"))
 
-    odom.data[Symbol(varname)] = fr
+    odom.data[Symbol(fr.name)] = PALEOmodel.FieldRecord(fr, odom)
 
     return nothing
 end
@@ -713,7 +740,7 @@ end
 
 
 function initialize!(
-    output::OutputMemory, model::PB.Model, modeldata::PB.ModelData, nrecords;
+    output::OutputMemory, model::PB.Model, modeldata::PB.ModelData, nrecords=nothing;
     record_dim_name::Symbol=:tmodel,
     record_coord_name::Symbol=record_dim_name,
     record_coord_units::AbstractString="yr",
@@ -739,7 +766,7 @@ function initialize!(
     empty!(output.domains)
     for dom in model.domains
         output.domains[dom.name] = OutputMemoryDomain(
-            dom, modeldata; # nrecords;
+            dom, modeldata, nrecords;
             parentdataset=output,
             record_dim_name,
             record_coord_name,
@@ -1116,7 +1143,7 @@ function variable_to_netcdf!(
     ds,
     record_dim_name::AbstractString,
     vname::AbstractString, 
-    vfr::PALEOmodel.FieldRecord, 
+    @nospecialize(vfr::PALEOmodel.FieldRecord), 
     field_data::Type{<:PB.AbstractData},
     grid_spatial_dims::NTuple{NS, String},
     spatial_unpackfn,
@@ -1454,7 +1481,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.UnstructuredVectorGrid)
 
     NCDatasets.defDim(ds, "cells", grid.ncells)
 
-    coordnames_to_netcdf(ds, "grid_coords", grid.coordinates)
+    coordnames_to_netcdf(ds, "PALEO_grid_coords", grid.coordinates)
 
     # named cells
     cellnames = [String(k) for (k, v) in grid.cellnames]
@@ -1485,7 +1512,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.UnstructuredColumnGrid)
     v = NCDatasets.defVar(ds, "Icolumns", Icolumns .- 1, ("cells",)) # NB: zero-based
     v.attrib["comment"] = "zero-based indices of cells from top to bottom ordered by columns"
 
-    coordnames_to_netcdf(ds, "grid_coords", grid.coordinates)
+    coordnames_to_netcdf(ds, "PALEO_grid_coords", grid.coordinates)
 
     # optional column labels
     if !isempty(grid.columnnames)    
@@ -1511,7 +1538,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.CartesianArrayGrid{N}) where {N}
         subdomain_to_netcdf!(ds, name, subdom)
     end
 
-    coordnames_to_netcdf(ds, "grid_coords", grid.coordinates)
+    coordnames_to_netcdf(ds, "PALEO_grid_coords", grid.coordinates)
 
     return (Tuple(nd.name for nd in grid.dimensions), identity)
 end
@@ -1553,7 +1580,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.CartesianLinearGrid{N}) where {N}
         subdomain_to_netcdf!(ds, name, subdom)
     end
 
-    coordnames_to_netcdf(ds, "grid_coords", grid.coordinates)
+    coordnames_to_netcdf(ds, "PALEO_grid_coords", grid.coordinates)
 
     spatial_unpackfn = d -> PB.Grids.internal_to_cartesian(grid, d) # unpack linear representation into cartesian grid
 
@@ -1617,7 +1644,7 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredVectorGrid}, ds::NCDatasets.
     vec_cellnames_indices = ncattrib_as_vector(ds, "PALEO_cellnames_indices") .+ 1 # netcdf is zero offset
     cellnames = Dict{Symbol, Int}(k=>v for (k, v) in zip(vec_cellnames, vec_cellnames_indices))
     
-    coordinates = netcdf_to_coordnames(ds, "grid_coords")
+    coordinates = netcdf_to_coordnames(ds, "PALEO_grid_coords")
 
     return (PB.Grids.UnstructuredVectorGrid(ncells, cellnames, subdomains, coordinates), identity)
 end
@@ -1637,7 +1664,7 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.
         colstart += cells_this_column
     end
 
-    coordinates = netcdf_to_coordnames(ds, "grid_coords")
+    coordinates = netcdf_to_coordnames(ds, "PALEO_grid_coords")
     # backwards compatibility
     if haskey(ds.attrib, "PALEO_z_coords") && !haskey(coordinates, "cells")
         coordinates["cells"] = ncattrib_as_vector(ds, "PALEO_z_coords")
@@ -1660,7 +1687,7 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianArrayGrid}, ds::NCDatasets.Data
     ncells, dimensions, dimensions_extra, zidxsurface, display_mult, londim, latdim, zdim =
         _netcdf_to_cartesiandimscoords(PB.Grids.CartesianArrayGrid, ds, dsvars)
 
-    coordinates = netcdf_to_coordnames(ds, "grid_coords")
+    coordinates = netcdf_to_coordnames(ds, "PALEO_grid_coords")
 
     grid = PB.Grids.CartesianArrayGrid{length(dims)}(
         ncells,
@@ -1682,7 +1709,7 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dat
         _netcdf_to_cartesiandimscoords(PB.Grids.CartesianLinearGrid, ds, dsvars)
     ncolumns = ds.attrib["PALEO_columns"]
 
-    coordinates = netcdf_to_coordnames(ds, "grid_coords")
+    coordinates = netcdf_to_coordnames(ds, "PALEO_grid_coords")
 
     # convert back to linear vectors
     linear_index = Array(dsvars["linear_index"]) .+ 1 # netcdf zero based

@@ -241,4 +241,33 @@ end
         @test fra.values[:, 2] == fill(43.0, 2)
     end
 
+
+    @testset "copy FieldRecord" begin
+        g = PB.Grids.UnstructuredColumnGrid(ncells=5, Icolumns=[collect(1:5)])
+
+        f = PB.Field(PB.ScalarData, (), Float64, PB.CellSpace, g; allocatenans=true)
+        
+        f.values .= 42.0
+        fr = PALEOmodel.FieldRecord(
+            (record_dim = (name = "records",), ),  # mock dataset to supply record_dim.name
+            f, 
+            Dict{Symbol, Any}(), 
+        )
+        push!(fr, f)
+        f.values .= 43.0
+        push!(fr, f)
+
+        @test fr.records == [fill(42.0, 5), fill(43.0, 5)]
+
+        fr_copy = copy(fr)
+        @test fr_copy.records == [fill(42.0, 5), fill(43.0, 5)]
+        push!(fr_copy, f)
+        @test fr_copy.records == [fill(42.0, 5), fill(43.0, 5),  fill(43.0, 5)]
+        @test length(fr_copy) == 3
+        @test PB.get_dimension(fr_copy, "records") == PB.NamedDimension("records", 3)
+
+        @test fr.records == [fill(42.0, 5), fill(43.0, 5)]
+        @test PB.get_dimension(fr, "records") == PB.NamedDimension("records", 2)
+
+    end
 end
