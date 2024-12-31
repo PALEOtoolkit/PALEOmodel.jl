@@ -22,6 +22,7 @@ import ForwardDiff
 import ForwardDiff
 import SparsityTracing
 import OrderedCollections
+using DocStringExtensions
 
 import TimerOutputs: @timeit, @timeit_debug
 

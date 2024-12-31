@@ -3,16 +3,23 @@
 
 A generic [xarray](https://xarray.pydata.org/en/stable/index.html)-like or 
 [IRIS](https://scitools-iris.readthedocs.io/en/latest/)-like 
-Array with named dimensions and optional coordinates.
+n-dimensional Array with named dimensions and optional coordinates.
 
 NB: this aims to be simple and generic, not efficient !!! Intended for representing model output,
 not for numerically-intensive calculations.
+
+# Fields
+$(TYPEDFIELDS)
 """
-struct FieldArray{T}
+struct FieldArray{T <: AbstractArray}
+    "variable name"
     name::String
+    "n-dimensional Array of values"
     values::T
+    "Names of dimensions with optional attached coordinates"
     dims_coords::Vector{Pair{PB.NamedDimension, Vector{FixedCoord}}}
-    attributes::Union{Dict, Nothing}
+    "variable attributes"
+    attributes::Union{Dict{Symbol, Any}, Nothing}
 end
 
 PB.get_dimensions(f::FieldArray) = PB.NamedDimension[first(dc) for dc in f.dims_coords]

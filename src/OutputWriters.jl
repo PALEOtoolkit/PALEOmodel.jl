@@ -116,17 +116,10 @@ function PB.show_variables(output::PALEOmodel.AbstractOutputWriter) end
     get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString [, allselectargs::NamedTuple] [; coords::AbstractVector]) -> FieldArray
     get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; allselectargs...) -> FieldArray
 
-Return a [`PALEOmodel.FieldArray`](@ref) containing data values and any attached coordinates, for the 
-[`PALEOmodel.FieldRecord`](@ref) for `varname`, and records and spatial region defined by `selectargs`
-    
-If `coords` is not supplied, equivalent to `PALEOmodel.get_array(PB.get_field(output, varname), allselectargs)`.
+Return a [`PALEOmodel.FieldArray`](@ref) containing data values and any attached coordinates.
 
-Optional argument `coords` can be used to supply plot coordinates from Variable in output, to replace any default coordinates.
-Format is a Vector of Pairs of "dim_name"=>("var_name1", "var_name2", ...)
-
-Example: to replace a 1D column default pressure coordinate with a z coordinate:
- 
-    coords=["cells"=>("atm.zmid", "atm.zlower", "atm.zupper")]
+Equivalent to `PALEOmodel.get_array(PB.get_field(output, varname), allselectargs [; coords])`,
+see [`PALEOmodel.get_array(fr::PALEOmodel.FieldRecord)`](@ref).
 """
 function PALEOmodel.get_array(
     output::PALEOmodel.AbstractOutputWriter, varname::AbstractString;
@@ -146,20 +139,6 @@ function PALEOmodel.get_array(
     coords=nothing,
 )
     fr = PB.get_field(output, varname)   
-
-    # if isnothing(coords)
-    #     coords_records=nothing
-    # else
-    #     PALEOmodel.check_coords_argument(coords) ||
-    #         error("argument coords should be a Vector of Pairs of \"coord_name\"=>(\"var_name1\", \"var_name2\", ...), eg: [\"z\"=>(\"atm.zmid\", \"atm.zlower\", \"atm.zupper\"), ...]")
-
-    #     coords_records = [
-    #         coord_name => Tuple(PB.get_field(output, cvn) for cvn in coord_varnames) 
-    #         for (coord_name, coord_varnames) in coords
-    #     ]
-    # end        
-    # 
-    # return PALEOmodel.get_array(fr, allselectargs; coords=coords_records)
 
     return PALEOmodel.get_array(fr, allselectargs; coords)
 end
@@ -258,8 +237,6 @@ function OutputMemoryDomain(
     )
 
 end
-
-Base.length(output::OutputMemoryDomain) = output.record_dim.size
 
 "create from a PALEOboxes::Domain"
 function OutputMemoryDomain(
@@ -433,6 +410,8 @@ function OutputMemoryDomain(
     return odom
 end
 
+Base.length(output::OutputMemoryDomain) = output.record_dim.size
+
 function add_record!(odom::OutputMemoryDomain, modeldata, rec_coord)
         
     odom.record_dim = PB.NamedDimension(odom.record_dim.name, odom.record_dim.size + 1)
@@ -571,17 +550,6 @@ function PB.get_coordinates(odom::OutputMemoryDomain, dimname::AbstractString)
     return coord_names
 end
 
-
-#     coords = PALEOmodel.FixedCoord[]
-#     for cn in coord_names
-#         cfr = PB.get_field(odom, cn)
-#         @Infiltrator.infiltrate
-#         push!(coords, PALEOmodel.FixedCoord(cn, cfr.records, cfr.attributes))
-#     end
-
-#     return coords
-# end
-
 ########################################
 # OutputMemory
 ##########################################
@@ -695,14 +663,14 @@ end
 """
     save_jld2(output::OutputMemory, filename)
 
-Deprecated - use [`save_netcdf`](@ref)
+Removed in PALEOmodel v0.16 - use [`save_netcdf`](@ref)
 
 Save to `filename` in JLD2 format (NB: filename must either have no extension or have extension `.jld2`)
 """
 function save_jld2(output::OutputMemory, filename)
 
-    @error """save_jld2 has been removed.
-             Please use save_netcdf instead"""
+    @error """save_jld2 has been removed in PALEOmodel v0.16
+              Please use save_netcdf instead"""
 
     return nothing
 end
@@ -710,18 +678,17 @@ end
 """
     load_jld2!(output::OutputMemory, filename)
 
+Removed in PALEOmodel v0.16 - use [`save_netcdf`](@ref), [`load_netcdf!`](@ref) for new output,
+or use an earlier version of PALEOmodel to load jld2 output and save to netcdf.
+
 Load from `filename` in JLD2 format, replacing any existing content in `output`.
 (NB: filename must either have no extension or have extension `.jld2`).
-
-# Example
-```julia
-julia> output = PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), "savedoutput.jld2")
-```
 """
 function load_jld2!(output::OutputMemory, filename)
 
-   @error """load_jld2! has been removed.
-             Please use save_netcdf, load_netcdf! instead"""
+   @error """load_jld2! has been removed in PALEOmodel v0.16.
+             Please use save_netcdf, load_netcdf! for new output,
+             or use an earlier version of PALEOmodel to load jld2 output and save to netcdf."""
 
     return nothing
 end

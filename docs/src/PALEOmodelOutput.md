@@ -80,7 +80,7 @@ CurrentModule = PALEOmodel
 
 ```@docs
 FieldArray
-get_array(fr::FieldRecord; coords=nothing)
+get_array(fr::FieldRecord)
 FixedCoord
 ```
 

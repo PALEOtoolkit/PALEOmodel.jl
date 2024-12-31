@@ -155,11 +155,21 @@ function Base.show(io::IO, ::MIME"text/plain", @nospecialize(fr::FieldRecord))
     return nothing
 end
 
-"test whether Field contains single elements
-TODO this will currently return false for CellSpace with ncells=1, which could be changed to true ?
-TODO would be clearer to directly use PB.internal_size(Space, mesh) == (1,) which would also handle the CellSpace with ncells=1 case,
+"""
+    field_single_element(fr::FieldRecord)::Bool
+    field_single_element(f::Field)::Bool
+    field_single_element(::Type{FieldRecord})::Bool
+    field_single_element(::Type{Field})::Bool
+
+Test whether FieldRecord contains Fields with single elements stored as a Vector instead of a  Vector of records.
+
+- `field_single_element == false`: Fields contain array `values`, these are stored in FieldRecord `records` as a Vector of arrays.
+- `field_single_element == true` Fields contain a single value, stored in FieldRecord `records` as Vector of `eltype(Field.values)`. 
+
+NB: this works on Types, and will return false for a field with Space == CellSpace with ncells=1, even though this actually contains a single
+value. TODO might be clearer to directly use PB.internal_size(Space, mesh) == (1,) which would also handle the CellSpace with ncells=1 case,
 but this wouldn't work in the type domain (needs an instance of mesh::Mesh)
-"
+"""
 function field_single_element(::Type{FieldData}, N, ::Type{Space}, ::Type{Mesh}) where {FieldData <: PB.AbstractData, Space <: PB.AbstractSpace, Mesh}
     if PB.field_single_element(FieldData, N) && (Space == PB.ScalarSpace || (Space == PB.CellSpace && Mesh == Nothing))
         return true
@@ -217,29 +227,69 @@ function Base.copy(fr::FieldRecord{FieldData, Space, V, N, Mesh, R}) where {Fiel
 end
 
 """    
-    get_array(fr::FieldRecord [, allselectargs::NamedTuple] [; coords::AbstractVector]) -> FieldArray
-    [deprecated] get_array(fr::FieldRecord [; coords::AbstractVector] [; allselectargs...]) -> FieldArray
+    get_array(fr::FieldRecord [, allselectargs::NamedTuple] [; coords::AbstractVector]) -> fa::FieldArray
+    [deprecated] get_array(fr::FieldRecord [; coords::AbstractVector] [; allselectargs...]) -> fa::FieldArray
 
-Return a [`FieldArray`](@ref) containing `fr::FieldRecord` data values and
+Return a [`FieldArray`](@ref) containing an Array of values and
 any attached coordinates, for records and spatial region defined by `allselectargs`.
 
-`allselectarg` may include `recordarg` to define records, `selectargs` to define a spatial region.
+# Selecting records and regions
+`allselectargs` is a `NamedTuple` of form:
 
-`recordarg` can be one of:
-- `records=r::Int` to select a single record, or `records = first:last` to select a range.
-- `<record coord>`: (where eg `<record coord>=tmodel`), `<record_coord>=t::Float64` to select a single record
-  with the nearest value of `fr.coords_record`, or `<record_coord>=(first::Float64, last::Float64)` (a Tuple) to select a range
-  starting at the record with the nearest value of `fr.coords_record` before `first` and ending at the nearest record after
-  `last`.
+    (<dimcoordname> = <filter>, <dimcoordname> = <filter>,  ... [,expand_cartesian=false] [, squeeze_all_single_dims=true])
 
-Available `selectargs` depend on the FieldRecord dimensions (as returned by `get_dimensions`, which will be a subset
-of grid spatial dimensions and Domain data dimensions) and corresponding attached coordinates (as returned by `get_coordinates`.
+where `<dimcoordname>` is of form:
+- `<dimname>_isel` to select by array indices: `<filter>` may then be a single `Int` to select a single index, or a range `first:last`
+  to select a range of indices.
+- `<coordname>` to select by coordinate values using the coordinates attached to each dimension: `<filter>` may then be a single number
+  to select a single index corresponding to the nearest value of the corresponding coordinate, or `(first::Float64, last::Float64)` 
+  (a Tuple) to select a range starting at the index with the nearest value of `fr.coords_record` before `first` and ending at 
+  the nearest index after `last`.
+
+Available dimensions and coordinates `<dimcoordname>` depend on the FieldRecord dimensions (as returned by `get_dimensions`, which will be a subset
+of grid spatial dimensions and Domain data dimensions) and corresponding attached coordinates (as returned by `get_coordinates`).
+
+Some synonyms are defined for commonly used `<dimnamecoordname>`:
+
+|synonyms     | dimcoordname            | comment                                           |
+|:------------| :---------------------- |:--------------------------------------------------|
+| records     | <recorddim>_isel        | <recorddim> is usually tmodel                     |
+| cells, cell | cells_isel              |                                                   |
+| column=<n>  | cells_isel = first:last | select range of cells corresponding to column n   |  
 
 Optional argument `coords` can be used to replace the attached coordinates for one or more dimensions.
 Format is a Vector of Pairs of `"<dim_name>"=>("<var_name1>", "<var_name2>", ...)`, 
-eg to replace a 1D column default pressure coordinate with a z coordinate:
+eg to replace an nD column atmosphere model default pressure coordinate with a z coordinate:
 
     coords=["cells"=>("atm.zmid", "atm.zlower", "atm.zupper")]
+
+Optional argument `expand_cartesian` is only needed for spatially resolved output using a `CartesianLinearGrid`, and should be 
+set to `true` to expand compressed internal data (with spatial dimension `cells`) to a cartesian array (with spatial dimensions eg `lon`, `lat`, `zt`),
+
+Dimensions corresponding to a selection for a single index or coordinate value are always squeezed out from the returned [`FieldArray`](@ref).
+Optional argument `squeeze_all_single_dims` (default `true`) controls whether *all* output dimensions that contain a single index are
+squeezed out (including eg a selection for a range that results in a dimension with one index, or where the input `FieldRecord` contains a dimension 
+with a single index).
+
+Selection arguments used are returned as strings in `fa.attributes` `filter_records` and `filter_region` for use in plot labelling etc.
+
+
+# Examples
+- select a timeseries for single cell index 3
+
+      get_array(fr, (cell=3, ))
+- select first column at nearest available time to model time 10.0
+
+      get_array(fr, (column=1, tmodel=10.0))
+- set first column at nearest available time to model time 10.0, replacing atmosphere model pressure coordinate with z coordinate:
+
+      get_array(fr, (column=1, tmodel=10.0); coords=["cells"=>("atm.zmid", "atm.zlower", "atm.zupper")])
+- select surface 2D array (dimension `zt`, index 1) from 3D output at nearest available time to model time 10.0, expanding `CartesianLinearGrid`.
+
+      get_array(fr, (zt_isel=1, tmodel=10.0, expand_cartesian=true))
+- select section 2D array at nearest index to longitude 200 degrees from 3D output at nearest available time to model time 10.0, expanding `CartesianLinearGrid`.
+
+      get_array(fr, (lon=200.0, tmodel=10.0, expand_cartesian=true))
 
 """
 function get_array(
