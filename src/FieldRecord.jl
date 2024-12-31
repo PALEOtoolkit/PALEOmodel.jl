@@ -322,6 +322,12 @@ Selection arguments used are returned as strings in `fa.attributes` `filter_reco
 
       get_array(fr, (lon=200.0, tmodel=10.0, expand_cartesian=true))
 
+# Limitations
+
+- time-varying coordinates (eg a z coordinate in an atmosphere climate model) are not fully handled. If a single record is selected, the correct
+  values for the coordinate at that time will be returned, but if multiple records are selected, the coordinate will be incorrectly fixed to the
+  values at the time corresponding to the first record.
+
 """
 function get_array(
     @nospecialize(fr::FieldRecord); 
