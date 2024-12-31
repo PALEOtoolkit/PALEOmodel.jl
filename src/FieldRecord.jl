@@ -96,6 +96,8 @@ end
 
 space(fr::FieldRecord{FieldData, Space, V, N, Mesh, R}) where {FieldData, Space, V, N, Mesh, R} = Space
 
+field_data(fr::FieldRecord{FieldData, Space, V, N, Mesh, R}) where {FieldData, Space, V, N, Mesh, R} = FieldData
+
 function PB.get_dimensions(fr::FieldRecord; expand_cartesian=false)
     dims_spatial = PB.get_dimensions(fr.mesh, space(fr); expand_cartesian)
     dims = [dims_spatial..., fr.data_dims..., PB.NamedDimension(fr.dataset.record_dim.name, length(fr))]
@@ -225,6 +227,35 @@ function Base.copy(fr::FieldRecord{FieldData, Space, V, N, Mesh, R}) where {Fiel
         deepcopy(fr.attributes),
     )
 end
+
+"""
+    PB.get_data(fr::FieldRecord; records=nothing)
+
+Get data records in raw format.
+
+`records` may be `nothing` to get all records, 
+an `Int` to select a single record, or a range to select multiple records.
+"""    
+function PB.get_data(fr::FieldRecord; records=nothing)
+    
+    if isnothing(records)
+        data_output = fr.records
+    else        
+        # bodge - fix scalar data
+        # if isa(records, Integer) && !isa(data_output, AbstractVector)
+        #     data_output =[data_output]
+        # 
+        if isa(records, Integer) && field_single_element(fr)            
+            # represent a scalar as a 0D Array
+            data_output = Array{eltype(fr.records), 0}(undef)
+            data_output[] = fr.records[records]
+        else
+            data_output = fr.records[records]
+        end
+    end
+
+    return data_output
+end  
 
 """    
     get_array(fr::FieldRecord [, allselectargs::NamedTuple] [; coords::AbstractVector]) -> fa::FieldArray
@@ -601,4 +632,186 @@ function _filter_dims_coords(
     end
 
     return nothing
+end
+
+
+# TODO time-independent variables are indicated by setting :is_constant attribute,
+# but this is only recently added and FieldRecord still stores a record for every timestep
+# This uses :is_constant to guess if a variable is constant, and then checks the values really are constant
+function variable_is_constant(fr::FieldRecord)
+
+    is_constant = false
+    # PALEO indicates time-independent variables by setting :is_constant attribute,
+    # but currently FieldRecord still stores all the records
+    if get(fr.attributes, :is_constant, false) == true
+        data_identical = false
+        for rcd in fr.records
+            if rcd == first(fr.records) || (all(isnan, rcd) && all(isnan, first(fr.records)))
+                data_identical = true
+            end
+        end
+        if data_identical
+            is_constant = true
+        else
+            @warn "variable $(fr.name) has :is_constant set but data is not constant !"
+        end
+    end
+
+    return is_constant
+end
+
+
+"""
+    get_array_full(fr::FieldRecord; [expand_cartesian=false], [omit_recorddim_if_constant=true]) 
+        -> avalues::Array, (avalues_dimnames...)
+
+Return all records as an n-dimensional Array, with a Tuple of dimension names
+
+If `omit_recorddim_if_constant`, squeeze out record dimension if `variable_is_constant(fr) == true`.
+"""
+function get_array_full(@nospecialize(fr::FieldRecord); expand_cartesian=false, omit_recorddim_if_constant=true)
+
+    if omit_recorddim_if_constant
+        is_constant = variable_is_constant(fr)
+    else
+        is_constant = false
+    end
+
+    dims_all = PB.get_dimensions(fr; expand_cartesian)
+    last_dim_idx = is_constant ? length(dims_all) - 1 : length(dims_all)
+    avalues_dimnames = Tuple(nd.name for nd in dims_all[1:last_dim_idx])
+
+    # create values array
+    if field_single_element(fr)
+        if is_constant
+            # represent a scalar as a 0D Array
+            avalues = Array{eltype(fr.records), 0}(undef)
+            avalues[] = fr.records[1]
+        else
+            avalues = fr.records
+        end
+    else        
+        if expand_cartesian && PB.has_internal_cartesian(fr.mesh, space(fr))
+            expand_fn = x -> PB.Grids.internal_to_cartesian(fr.mesh, x)
+            aeltype = Union{Missing, eltype(first(fr.records))}
+        else
+            expand_fn = identity
+            aeltype = eltype(first(fr.records))
+        end
+        
+        acolons_no_recorddim = ntuple(x->Colon(), length(dims_all)-1)
+
+        if is_constant
+            avalues = Array{aeltype, length(dims_all)-1}(undef, [nd.size for nd in dims_all[1:end-1]]...)
+            avalues[acolons_no_recorddim...] .= expand_fn(fr.records[1])
+        else
+            avalues = Array{aeltype, length(dims_all)}(undef, [nd.size for nd in dims_all]...)
+            _copy_array_from_records!(avalues, acolons_no_recorddim, fr, expand_fn)      
+        end
+    end
+
+    return avalues, avalues_dimnames
+end
+
+# function barrier optimisation
+function _copy_array_from_records!(avalues, acolons_no_recorddim, fr, expand_fn)
+    for ri in 1:length(fr)
+        avalues[acolons_no_recorddim..., ri] .= expand_fn(fr.records[ri])
+    end
+    return avalues
+end
+
+"""
+    FieldRecord(dataset, avalues::Array, avalues_dimnames, attributes::Dict{Symbol, Any}; [expand_cartesian=false])
+
+Create from an Array of data values `avalues` (inverse of [`get_array_full`](@ref))
+
+FieldRecord type and dimensions are set from a combination of `attributes` and `dataset` dimensions and grid, where
+`Space = attributes[:space]`, `FieldData = attributes[:field_data]`, `data_dims` are set from names in `attributes[:data_dims]`.
+
+Dimension names and size are cross-checked against supplied names in `avalues_dimnames`
+"""
+function FieldRecord(
+    dataset,
+    avalues::AbstractArray,
+    avalues_dimnames::Union{Vector{String}, Tuple{Vararg{String}}},
+    attributes::Dict{Symbol, Any};
+    expand_cartesian::Bool=false,
+)
+    FieldData = attributes[:field_data]
+
+    Space = attributes[:space]
+    dims_spatial = PB.get_dimensions(dataset.grid, Space; expand_cartesian)
+
+    data_dim_names = attributes[:data_dims]
+    dataset_dims_all = PB.get_dimensions(dataset)
+ 
+    data_dims_nd_vec = PB.NamedDimension[]
+    for dd_name in data_dim_names
+        dd_idx = findfirst(nd -> nd.name == dd_name, dataset_dims_all)
+        push!(data_dims_nd_vec, dataset_dims_all[dd_idx])
+    end
+    data_dims = Tuple(data_dims_nd_vec)
+   
+    record_dim = dataset_dims_all[end]
+    is_constant = !(record_dim.name in avalues_dimnames)
+
+    # check dimension names and sizes
+    dims_expected = [dims_spatial..., data_dims...]
+    if !is_constant
+        push!(dims_expected, record_dim)
+    end
+    @assert length(avalues_dimnames) == length(dims_expected)
+    for i in 1:length(avalues_dimnames)
+        @assert avalues_dimnames[i] == dims_expected[i].name
+        @assert size(avalues, i) == dims_expected[i].size
+    end
+
+    if field_single_element(FieldData, length(data_dims), Space, typeof(dataset.grid))
+        if is_constant
+            records = fill(avalues[], record_dim.size)  #  avalues is 0D Array if is_constant == true
+        else
+            records = avalues
+        end
+    else
+        if expand_cartesian && PB.has_internal_cartesian(dataset.grid, Space)
+            pack_fn = x -> PB.Grids.cartesian_to_internal(dataset.grid, x)
+        else
+            pack_fn = identity
+        end
+        
+        if is_constant
+            first_record = pack_fn(avalues)
+            records = [first_record for i in 1:record_dim.size]
+        else
+            records = _create_records_from_array!(avalues, pack_fn)
+        end
+    end
+    
+    vfr = PALEOmodel.FieldRecord(
+        dataset,
+        records, 
+        FieldData, 
+        data_dims,
+        Space, 
+        dataset.grid,
+        attributes,
+    ) 
+
+    return vfr
+end
+
+# function barrier optimisation
+function _create_records_from_array!(avalues, pack_fn)
+    acolons_no_recorddim = ntuple(x->Colon(), ndims(avalues)-1)
+
+    first_record = pack_fn(avalues[acolons_no_recorddim..., 1])
+    records = Vector{typeof(first_record)}(undef, last(size(avalues)))
+    records[1] = first_record
+
+    for ri in 2:last(size(avalues))
+        records[ri] = pack_fn(avalues[acolons_no_recorddim..., ri])
+    end
+
+    return records
 end

@@ -470,18 +470,8 @@ end
 function PB.get_data(output::OutputMemoryDomain, varname::AbstractString; records=nothing)
 
     fr = PB.get_field(output, varname)
-    
-    if isnothing(records)
-        data_output = fr.records
-    else
-        data_output = fr.records[records]
-        # bodge - fix scalar data
-        if isa(records, Integer) && !isa(data_output, AbstractVector)
-            data_output =[data_output]
-        end
-    end
 
-    return data_output
+    return PB.get_data(fr; records)
 end    
 
 function PB.show_variables(
@@ -932,54 +922,36 @@ function save_netcdf(
             nc_dataset.attrib[k] = v
         end
 
-        for (domname, dom) in output.domains
+        for odom in values(output.domains)
 
-            dsg = NCDatasets.defGroup(nc_dataset, dom.name; attrib=[])
-            record_dim_name = dom.record_dim.name # record dimension (eg tmodel)
+            dsg = NCDatasets.defGroup(nc_dataset, odom.name; attrib=[])
+            record_dim_name = odom.record_dim.name # record dimension (eg tmodel)
             dsg.attrib["record_dim_name"] =  record_dim_name
-            NCDatasets.defDim(dsg, record_dim_name, dom.record_dim.size)
-            dsg.attrib["record_dim_coordinates"] = dom.record_dim_coordinates
+            NCDatasets.defDim(dsg, record_dim_name, odom.record_dim.size)
+            dsg.attrib["record_dim_coordinates"] = odom.record_dim_coordinates
 
-            spatial_dimnames, spatial_unpackfn = grid_to_netcdf!(dsg, dom.grid)
+            grid_to_netcdf!(dsg, odom.grid)
 
             # data_dims
             # TODO these are NamedDimension with attached FixedCoord, where
             # the FixedCoord may not be present as a variable in the data,
             # and may also not have the correct name or even a unique name !
             # As a workaround, we generate a unique name from dim_name * coord_name, and add the Variable
-            data_dim_names = String[d.name for d in dom.data_dims]
+            data_dim_names = String[d.name for d in odom.data_dims]
             dsg.attrib["data_dims"] = data_dim_names
-            coordnames_to_netcdf(dsg, "data_dims_coords", dom.data_dims_coordinates)            
+            coordnames_to_netcdf(dsg, "data_dims_coords", odom.data_dims_coordinates)            
 
-            varnames = sort(String.(keys(dom.data)))
-            added_isotopelinear_dims = false
+            varnames = sort(String.(keys(odom.data)))
             nc_all_vdata = []
             for vname in varnames
-        
-                varfr = PB.get_field(dom, vname)
-                # see get_field method above         
-                field_data = varfr.attributes[:field_data]
-                space = varfr.attributes[:space]
+                varfr = PB.get_field(odom, vname)
 
-                if field_data == PB.IsotopeLinear && !added_isotopelinear_dims
-                    NCDatasets.defDim(dsg, "isotopelinear", 2)
-                    v = NCDatasets.defVar(dsg, "isotopelinear", ["total", "delta"], ("isotopelinear",))
-                    v.attrib["comment"] = "components of an isotope variable"
-                    added_isotopelinear_dims = true
-                end
-
-                @debug "writing Variable $(dom.name).$vname records eltype $(eltype(varfr.records)) space $space"
+                @debug "writing Variable $(odom.name).$vname records eltype $(eltype(varfr.records)) space $(space(varfr))"
 
                 nc_v, nc_vdata = variable_to_netcdf!(
                     dsg,
-                    record_dim_name,
                     vname, 
-                    varfr, 
-                    field_data,
-                    spatial_dimnames,
-                    spatial_unpackfn,
-                    space, 
-                    dom.grid;
+                    varfr;
                     define_only=define_all_first,  # just define the variable, don't write the data
                 )
                 
@@ -1062,7 +1034,7 @@ function load_netcdf!(output::OutputMemory, filename; check_ext=true)
             # reading out variables is slow, so do this once
             dsgvars = Dict(varname=>var for (varname, var) in dsg)
 
-            grid, spatial_packfn = netcdf_to_grid(dsg, dsgvars)
+            grid = netcdf_to_grid(dsg, dsgvars)
 
             data_dim_names = ncattrib_as_vector(dsg, "data_dims")
             data_dim_sizes = [dsg.dim[ddn] for ddn in data_dim_names]
@@ -1082,14 +1054,13 @@ function load_netcdf!(output::OutputMemory, filename; check_ext=true)
             )
 
             for (vnamenetcdf, var) in dsgvars
-                if haskey(var.attrib, "var_name") # a PALEO variable, not eg a grid variable                    
-                    attributes = netcdf_to_attributes(var)
+                attributes = netcdf_to_attributes(var)
+                if haskey(attributes, :var_name) # a PALEO variable, not eg a grid variable
                     vname = netcdf_to_name(vnamenetcdf, attributes)
                     vfr = netcdf_to_variable(
                         odom,
                         var,
                         attributes,
-                        spatial_packfn,
                     )
 
                     odom.data[Symbol(vname)] = vfr
@@ -1108,54 +1079,28 @@ end
 # write a variable to netcdf. cf get_field, FieldRecord
 function variable_to_netcdf!(
     ds,
-    record_dim_name::AbstractString,
     vname::AbstractString, 
-    @nospecialize(vfr::PALEOmodel.FieldRecord), 
-    field_data::Type{<:PB.AbstractData},
-    grid_spatial_dims::NTuple{NS, String},
-    spatial_unpackfn,
-    space::Type{S}, 
-    grid::Union{Nothing, PB.AbstractMesh};
+    @nospecialize(varfr::PALEOmodel.FieldRecord);
     define_only=true,
-) where {NS, S <: PB.AbstractSpace}
+) 
+    vname = name_to_netcdf(vname, varfr.attributes)
 
-    if space === PB.ScalarSpace
-        spatial_dims = ()
-        unpackfn = identity
-    else
-        spatial_dims = grid_spatial_dims
-        unpackfn = spatial_unpackfn
-    end
-   
-    vname = name_to_netcdf(vname, vfr.attributes)
+    vdata, vdata_dims = PALEOmodel.get_array_full(varfr; expand_cartesian=true, omit_recorddim_if_constant=true)
 
-    data_dims = vfr.attributes[:data_dims]
-    ND = length(data_dims)
-
-    if variable_is_constant(vname, vfr.records, vfr.attributes)
-        v_records_dim = ()
-        vdata = unpackfn(first(vfr.records))
-    else
-        v_records_dim = (record_dim_name,)
-        if !PALEOmodel.field_single_element(field_data, ND, space, typeof(grid))
-            # concatenate to array
-            vdata =  vectors_to_array(vfr.records, unpackfn)
-        else
-            vdata = vfr.records
-        end
-    end
-
+    field_data = PALEOmodel.field_data(varfr)
+    add_field_data_netcdf_dimensions(ds, field_data)
     field_data_dims = field_data_netcdf_dimensions(field_data)
     vdata = field_data_to_netcdf(field_data, vdata)
+    vdata_dims = (field_data_dims..., vdata_dims...)
 
     # if define_only = true, only define the variable, don't actually write the data
     # (allows optimisation as netcdf is slow to swap between 'define' and 'data' mode)
     # TODO fails if vdata contains missing (so eltype is eg Union{Missing, Float64}) at least with NCDatsets v0.12.17
     # https://github.com/Alexander-Barth/NCDatasets.jl/issues/223
     vdt = define_only ? eltype(vdata) : vdata
-    v = NCDatasets.defVar(ds, vname, vdt, (field_data_dims..., spatial_dims..., data_dims..., v_records_dim...))
+    v = NCDatasets.defVar(ds, vname, vdt, vdata_dims)
    
-    attributes_to_netcdf!(v, vfr.attributes)
+    attributes_to_netcdf!(v, varfr.attributes)
    
     return (v, vdata)
 end
@@ -1165,51 +1110,24 @@ function netcdf_to_variable(
     odom,
     var,
     attributes,
-    spatial_packfn,
 )
-
     field_data = attributes[:field_data]
-    space = attributes[:space]
-    data_dim_names = attributes[:data_dims]
-    data_dims_nd_vec = PB.NamedDimension[]
-    odom_dims = PB.get_dimensions(odom)
-    for dd_name in data_dim_names
-        dd_idx = findfirst(nd -> nd.name == dd_name, odom_dims)
-        push!(data_dims_nd_vec, odom_dims[dd_idx])
-    end
-    data_dims = Tuple(data_dims_nd_vec)
 
     vdata = Array(var) # convert to Julia Array
 
     vdata = netcdf_to_field_data(vdata, field_data)
-    
-    packfn = space == PB.ScalarSpace ? identity : spatial_packfn
 
-    if odom.record_dim.name in NCDatasets.dimnames(var)
-        if !PALEOmodel.field_single_element(field_data, length(data_dims), space, typeof(odom.grid))
-            vdata =  array_to_vectors(vdata, packfn)
-        end
-    else
-        # OutputMemory has no concept of a constant variable, so replicate
-        vdata = packfn(vdata)
-        if vdata isa AbstractArray && ndims(vdata) == 0
-            # 0D Array -> scalar
-            vdata = vdata[]
-        end
-        vdata = fill(vdata, odom.record_dim.size) # scalar -> Vector, Array/Vector -> Vector of Arrays/Vectors
-    end
-
-    
+    fielddata_dim_names = field_data_netcdf_dimensions(field_data)
+    vdata_dimnames = filter(dn -> !(dn in fielddata_dim_names), NCDatasets.dimnames(var))
+  
     vfr = PALEOmodel.FieldRecord(
         odom,
-        vdata, 
-        field_data, 
-        data_dims,
-        space, 
-        odom.grid,
-        attributes,
-    ) 
-
+        vdata,
+        vdata_dimnames,
+        attributes;
+        expand_cartesian=true,
+    )
+    
     return vfr
 end
 
@@ -1236,11 +1154,21 @@ end
 
 # ScalarData no additional dimensions
 field_data_netcdf_dimensions(field_data::Type{PB.ScalarData}) = ()
+add_field_data_netcdf_dimensions(ds, field_data::Type{PB.ScalarData}) = nothing
 field_data_netcdf_dimensions(field_data::Type{PB.ArrayScalarData}) = ()
+add_field_data_netcdf_dimensions(ds, field_data::Type{PB.ArrayScalarData}) = nothing
 field_data_to_netcdf(field_data::Type, x) = x # fallback for ScalarData, ArrayScalarData
 
 # serialize IsotopeLinear as (total, delta), NB: internal representation is (total, total*delta)
 field_data_netcdf_dimensions(field_data::Type{PB.IsotopeLinear}) = ("isotopelinear",)
+function add_field_data_netcdf_dimensions(ds, field_data::Type{PB.IsotopeLinear})
+    if !haskey(ds.dim, "isotopelinear")
+        NCDatasets.defDim(ds, "isotopelinear", 2)
+        v = NCDatasets.defVar(ds, "isotopelinear", ["total", "delta"], ("isotopelinear",))
+        v.attrib["comment"] = "components of an isotope variable"
+    end
+    return nothing
+end
 field_data_to_netcdf(field_data::Type{PB.IsotopeLinear}, x) = (x.v, x.v_delta)
 field_data_to_netcdf(field_data::Type{PB.IsotopeLinear}, ::Missing) = (missing, missing)
 function field_data_to_netcdf(field_data::Type{PB.IsotopeLinear}, x::Array{T}) where {T}
@@ -1304,98 +1232,6 @@ function netcdf_to_field_data(x, field_data::Type{PB.IsotopeLinear})
     return xout
 end
 
-# TODO PALEO has no real concept of time-independent variables
-#  time-independent variables are indicated by setting datatype attribute,
-# but this is also used for other purposes
-# This uses data_type to guess if a variable is constant, and then checks the values
-function variable_is_constant(vname::AbstractString, vdata::Vector, attributes)
-
-    is_constant = false
-    # PALEO indicates time-independent variables by setting data_type attribute    
-    if get(attributes, :datatype, nothing) == Float64
-        data_identical = false
-        for v in vdata
-            if v == first(vdata) || (all(isnan, v) && all(isnan, first(vdata)))
-                data_identical = true
-            end
-        end
-        if data_identical
-            is_constant = true
-        else
-            @warn "variable $vname has :data_type Float64 but data is not constant !"
-        end
-    end
-
-    return is_constant
-end
-
-
-"""
-    vectors_to_array(vecvec::Vector{<:AbstractArray}, unpackfn) -> array::Array
-
-Convert vector-of-vectors to Array,
-with extra last dimension = length of vecvec
-
-# Examples
-
-    julia> PALEOmodel.OutputWriters.vectors_to_array([[1, 3], [2, 4]], identity)
-    2×2 Matrix{Int64}:
-    1  2
-    3  4
-"""
-function vectors_to_array(vecvec::Vector{<:AbstractArray}, unpackfn)
-    firstvec = unpackfn(first(vecvec))
-    vs = size(firstvec)
-    T = eltype(firstvec)
-
-    a = Array{T}(undef, (vs..., length(vecvec)))
-    vcolons = ntuple(x->Colon(), length(vs))
-
-    # function barrier optimisation 
-    function _fill(vecvec, vcolons::NTuple)
-        for (i, vec) in enumerate(vecvec)
-            a[vcolons..., i] .= unpackfn(vec)
-        end
-    end
-
-    _fill(vecvec, vcolons)
-
-    return a
-end
-
-"""
-    array_to_vectors(array::AbstractArray, packfn) -> vecvec::Vector{<:Array}
-
-Create vector-of-arrays length = size of last dimension of array 
-
-# Examples
-    julia> PALEOmodel.OutputWriters.array_to_vectors([1 2; 3 4], identity) # 2x2 Matrix
-    2-element Vector{Vector{Int64}}:
-    [1, 3]
-    [2, 4]
-
-    julia> PALEOmodel.OutputWriters.array_to_vectors([1 2], identity) # 1x2 Matrix
-    2-element Vector{Vector{Int64}}:
-     [1]
-     [2]
-
-     julia> PALEOmodel.OutputWriters.array_to_vectors([1, 2], identity) # 2-element Vector 
-     2-element Vector{Int64}:
-      1
-      2
-"""
-function array_to_vectors(array::AbstractArray, packfn)
-   
-    vs = size(array)[1:end-1] 
-    vcolons = ntuple(x->Colon(), length(vs))
-
-    vecvec = [packfn(array[vcolons..., i]) for i in 1:last(size(array))]
-
-    return vecvec
-end
-
-
-
 function subdomain_to_netcdf!(ds, name::AbstractString, subdom::PB.Grids.BoundarySubdomain)
     NCDatasets.defDim(ds, "subdomain_"*name, length(subdom.indices))
 
@@ -1438,7 +1274,7 @@ end
 function grid_to_netcdf!(ds, grid::Nothing)
     ds.attrib["PALEO_GridType"] = "Nothing"
 
-    return ((), identity)
+    return nothing
 end
 
 
@@ -1461,7 +1297,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.UnstructuredVectorGrid)
         subdomain_to_netcdf!(ds, name, subdom)
     end
 
-    return (("cells", ), identity)
+    return nothing
 end
 
 function grid_to_netcdf!(ds, grid::PB.Grids.UnstructuredColumnGrid)
@@ -1491,7 +1327,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.UnstructuredColumnGrid)
         subdomain_to_netcdf!(ds, name, subdom)
     end
 
-    return (("cells", ), identity)
+    return nothing
 end
 
 function grid_to_netcdf!(ds, grid::PB.Grids.CartesianArrayGrid{N}) where {N}
@@ -1507,7 +1343,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.CartesianArrayGrid{N}) where {N}
 
     coordnames_to_netcdf(ds, "PALEO_grid_coords", grid.coordinates)
 
-    return (Tuple(nd.name for nd in grid.dimensions), identity)
+    return nothing
 end
 
 function grid_to_netcdf!(ds, grid::PB.Grids.CartesianLinearGrid{N}) where {N}
@@ -1549,9 +1385,7 @@ function grid_to_netcdf!(ds, grid::PB.Grids.CartesianLinearGrid{N}) where {N}
 
     coordnames_to_netcdf(ds, "PALEO_grid_coords", grid.coordinates)
 
-    spatial_unpackfn = d -> PB.Grids.internal_to_cartesian(grid, d) # unpack linear representation into cartesian grid
-
-    return (Tuple(nd.name for nd in grid.dimensions), spatial_unpackfn)
+    return nothing
 end
 
 function _cartesiandimscoords_to_netcdf(
@@ -1601,7 +1435,7 @@ function netcdf_to_grid(ds::NCDatasets.Dataset, dsvars::Dict)
     end
 end
 
-netcdf_to_grid(::Type{Nothing}, ds::NCDatasets.Dataset, dsvars::Dict) = (nothing, identity)
+netcdf_to_grid(::Type{Nothing}, ds::NCDatasets.Dataset, dsvars::Dict) = nothing
 
 function netcdf_to_grid(::Type{PB.Grids.UnstructuredVectorGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
     ncells = ds.dim["cells"]
@@ -1613,7 +1447,7 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredVectorGrid}, ds::NCDatasets.
     
     coordinates = netcdf_to_coordnames(ds, "PALEO_grid_coords")
 
-    return (PB.Grids.UnstructuredVectorGrid(ncells, cellnames, subdomains, coordinates), identity)
+    return PB.Grids.UnstructuredVectorGrid(ncells, cellnames, subdomains, coordinates)
 end
 
 function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
@@ -1644,7 +1478,7 @@ function netcdf_to_grid(::Type{PB.Grids.UnstructuredColumnGrid}, ds::NCDatasets.
         columnnames = Symbol[]
     end
     
-    return (PB.Grids.UnstructuredColumnGrid(ncells, Icolumns, columnnames, subdomains, coordinates), identity)
+    return PB.Grids.UnstructuredColumnGrid(ncells, Icolumns, columnnames, subdomains, coordinates)
 end
 
 function netcdf_to_grid(::Type{PB.Grids.CartesianArrayGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
@@ -1665,7 +1499,7 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianArrayGrid}, ds::NCDatasets.Data
         coordinates,
     )
     
-    return (grid, identity)
+    return grid
 end
 
 function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dataset, dsvars::Dict)
@@ -1705,10 +1539,8 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianLinearGrid}, ds::NCDatasets.Dat
         linear_index,
         cartesian_index,
     )
-    
-    spatial_packfn = d -> PB.Grids.cartesian_to_internal(grid, d)
 
-    return (grid, spatial_packfn)
+    return grid
 end
 
 function _netcdf_to_cartesiandimscoords(
