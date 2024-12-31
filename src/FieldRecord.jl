@@ -684,8 +684,6 @@ function get_array_full(@nospecialize(fr::FieldRecord); expand_cartesian=false, 
     end
 
     dims_all = PB.get_dimensions(fr; expand_cartesian)
-    last_dim_idx = is_constant ? length(dims_all) - 1 : length(dims_all)
-    avalues_dimnames = Tuple(nd.name for nd in dims_all[1:last_dim_idx])
 
     # create values array
     if field_single_element(fr)
@@ -693,8 +691,11 @@ function get_array_full(@nospecialize(fr::FieldRecord); expand_cartesian=false, 
             # represent a scalar as a 0D Array
             avalues = Array{eltype(fr.records), 0}(undef)
             avalues[] = fr.records[1]
+            avalues_dimnames = ()
         else
             avalues = fr.records
+            # we may have squeezed out a cells dimension for the case of a CellSpace field in a domain with no grid
+            avalues_dimnames = (dims_all[end].name, )
         end
     else        
         if expand_cartesian && PB.has_internal_cartesian(fr.mesh, space(fr))
@@ -714,6 +715,9 @@ function get_array_full(@nospecialize(fr::FieldRecord); expand_cartesian=false, 
             avalues = Array{aeltype, length(dims_all)}(undef, [nd.size for nd in dims_all]...)
             _copy_array_from_records!(avalues, acolons_no_recorddim, fr, expand_fn)      
         end
+
+        last_dim_idx = is_constant ? length(dims_all) - 1 : length(dims_all)
+        avalues_dimnames = Tuple(nd.name for nd in dims_all[1:last_dim_idx])
     end
 
     return avalues, avalues_dimnames
@@ -745,11 +749,15 @@ function FieldRecord(
     expand_cartesian::Bool=false,
 )
     FieldData = attributes[:field_data]
-
     Space = attributes[:space]
-    dims_spatial = PB.get_dimensions(dataset.grid, Space; expand_cartesian)
-
     data_dim_names = attributes[:data_dims]
+
+    dims_spatial_expected = PB.get_dimensions(dataset.grid, Space; expand_cartesian)
+    # we may have squeezed out a cells dimension for the case of a CellSpace field in a domain with no grid
+    if field_single_element(FieldData, length(data_dim_names), Space, typeof(dataset.grid))
+        dims_spatial_expected = []
+    end
+    
     dataset_dims_all = PB.get_dimensions(dataset)
  
     data_dims_nd_vec = PB.NamedDimension[]
@@ -763,7 +771,7 @@ function FieldRecord(
     is_constant = !(record_dim.name in avalues_dimnames)
 
     # check dimension names and sizes
-    dims_expected = [dims_spatial..., data_dims...]
+    dims_expected = [dims_spatial_expected..., data_dims...]
     if !is_constant
         push!(dims_expected, record_dim)
     end
