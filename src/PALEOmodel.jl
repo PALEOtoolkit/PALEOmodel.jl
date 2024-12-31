@@ -21,6 +21,8 @@ import PALEOboxes as PB
 import ForwardDiff
 import ForwardDiff
 import SparsityTracing
+import OrderedCollections
+using DocStringExtensions
 
 import TimerOutputs: @timeit, @timeit_debug
 
@@ -60,6 +62,8 @@ include("SplitDAE.jl")
 include("SteadyState.jl")
 
 include("SteadyStateKinsol.jl")
+
+include("CoordsDims.jl") 
 
 include("FieldArray.jl")
 

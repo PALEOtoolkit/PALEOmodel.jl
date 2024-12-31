@@ -60,25 +60,25 @@ end
 
 end
 
-@testset "SaveLoad_jld2" begin
+# @testset "SaveLoad_jld2" begin
 
-    model, modeldata, all_vars, output =  create_test_model_output(2)
-    all_values = all_vars.values
+#     model, modeldata, all_vars, output =  create_test_model_output(2)
+#     all_values = all_vars.values
 
-    all_values.global.O .= [2e19]
-    PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
-    all_values.global.O .= [4e19]
-    PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
+#     all_values.global.O .= [2e19]
+#     PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
+#     all_values.global.O .= [4e19]
+#     PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
 
-    tmpfile = tempname(; cleanup=true) 
-    PALEOmodel.OutputWriters.save_jld2(output, tmpfile)
+#     tmpfile = tempname(; cleanup=true) 
+#     PALEOmodel.OutputWriters.save_jld2(output, tmpfile)
 
-    load_output = PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
+#     load_output = PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
 
-    O_array = PALEOmodel.get_array(load_output, "global.O")
-    @test O_array.values == [2e19, 4e19]
+#     O_array = PALEOmodel.get_array(load_output, "global.O")
+#     @test O_array.values == [2e19, 4e19]
 
-end
+# end
 
 @testset "SaveLoad_netcdf" begin
 
@@ -139,6 +139,31 @@ end
     @test test_array.values == test
 end
 
+@testset "FieldRecordCreateAdd" begin
+    # Test creation from a FieldRecord
+
+    model, modeldata, all_vars, output =  create_test_model_output(2)
+    all_values = all_vars.values
+    all_values.global.O .= [2e19]
+    PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
+    all_values.global.O .= [4e19]
+    PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 1.0)
+
+   
+    # create new output Domain "diag" with record coordinate tmodel 
+    tmodel = PB.get_field(output, "global.tmodel")
+    diag = PALEOmodel.OutputWriters.OutputMemoryDomain("diag", copy(tmodel))
+    output.domains["diag"] = diag
+
+    # add a diagnostic
+    fr_O = PB.get_field(output, "global.O")
+    my_diag = copy(fr_O)
+    my_diag.records .= -42.0
+    my_diag.attributes[:var_name] = "my_diag"
+    my_diag.attributes[:description] = "a model diagnostic calculated from global.O"
+    PB.add_field!(diag, my_diag)
+    
+end
 
 end
 

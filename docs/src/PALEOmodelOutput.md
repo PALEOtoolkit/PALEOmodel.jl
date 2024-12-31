@@ -69,8 +69,6 @@ OutputMemoryDomain
 ```@docs
 save_netcdf
 load_netcdf!
-save_jld2
-load_jld2!
 ```
 
 ## Field Array
@@ -78,11 +76,12 @@ load_jld2!
 ```@meta
 CurrentModule = PALEOmodel
 ```
-[`FieldArray`](@ref) provides a generic array type with named dimensions `PALEOboxes.NamedDimension` and optional coordinates `PALEOboxes.FixedCoord` for processing of model output.
+[`FieldArray`](@ref) provides a generic array type with named dimensions `PALEOboxes.NamedDimension` and optional coordinates [`PALEOmodel.FixedCoord`](@ref) for processing of model output.
 
 ```@docs
 FieldArray
-get_array(f::PB.Field{D, PB.ScalarSpace, V, N, M}; attributes=nothing) where {D, V, N, M}
+get_array(fr::FieldRecord)
+FixedCoord
 ```
 
 ## Plotting output

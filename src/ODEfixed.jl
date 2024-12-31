@@ -400,7 +400,7 @@ function integrateFixed(
     write_output_record(outputwriter::Nothing, model, modeldata, timesteppers, tmodel, Δt_outer) = nothing
 
     # set initial state
-    touter = tspan[1]
+    touter = Float64(tspan[1])
 
     PALEOmodel.set_tforce!(modeldata.solver_view_all, touter)
 
@@ -488,7 +488,7 @@ function integrateFixedthreads(
     write_output_record(outputwriter::Nothing, barrier, model, modeldata, timesteppers, tmodel, Δt_outer, tid) = nothing
 
     # write initial state
-    touter = tspan[1]
+    touter = Float64(tspan[1])
     PALEOmodel.set_tforce!(modeldata.solver_view_all, touter)
     PALEOmodel.set_statevar!(modeldata.solver_view_all, initial_state)
     inextoutput = 2
