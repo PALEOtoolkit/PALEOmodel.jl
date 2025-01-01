@@ -113,35 +113,32 @@ function PB.has_variable(output::PALEOmodel.AbstractOutputWriter, varname::Abstr
 function PB.show_variables(output::PALEOmodel.AbstractOutputWriter) end
 
 """
-    get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString [, allselectargs::NamedTuple] [; coords::AbstractVector]) -> FieldArray
-    get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; allselectargs...) -> FieldArray
+    get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString [, allselectargs::NamedTuple]; kwargs...) -> FieldArray
+    [deprecated] get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; allselectargs...) -> FieldArray
 
 Return a [`PALEOmodel.FieldArray`](@ref) containing data values and any attached coordinates.
 
-Equivalent to `PALEOmodel.get_array(PB.get_field(output, varname), allselectargs [; coords])`,
+Equivalent to `PALEOmodel.get_array(PB.get_field(output, varname), allselectargs; kwargs)`,
 see [`PALEOmodel.get_array(fr::PALEOmodel.FieldRecord)`](@ref).
 """
 function PALEOmodel.get_array(
-    output::PALEOmodel.AbstractOutputWriter, varname::AbstractString;
-    coords=nothing,
-    allselectargs...
-)  
-    isempty(allselectargs) ||
-        Base.depwarn(
-            "allselectargs... will be deprecated in a future release.  Please use allselectargs::NamedTuple instead",
-            :get_array,
-        )
-    return PALEOmodel.get_array(output, varname, NamedTuple(allselectargs); coords=coords)
-end
-
-function PALEOmodel.get_array(
-    output::PALEOmodel.AbstractOutputWriter, varname::AbstractString, allselectargs::NamedTuple; # allselectargs::NamedTuple=NamedTuple() creates a method ambiguity with deprecated form above
-    coords=nothing,
+    output::PALEOmodel.AbstractOutputWriter, varname::AbstractString, @nospecialize(allselectargs::NamedTuple); # allselectargs::NamedTuple=NamedTuple() creates a method ambiguity with deprecated form above
+    kwargs...
 )
     fr = PB.get_field(output, varname)   
 
-    return PALEOmodel.get_array(fr, allselectargs; coords)
+    return PALEOmodel.get_array(fr, allselectargs; kwargs...)
 end
+
+function PALEOmodel.get_array(
+    output::PALEOmodel.AbstractOutputWriter, varname::AbstractString;
+    kwargs...
+) 
+    fr = PB.get_field(output, varname)
+
+    return PALEOmodel.get_array(fr; kwargs...)
+end
+
 
 """
     get_field(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString) -> FieldRecord
@@ -1085,7 +1082,12 @@ function variable_to_netcdf!(
 ) 
     vname = name_to_netcdf(vname, varfr.attributes)
 
-    vdata, vdata_dims = PALEOmodel.get_array_full(varfr; expand_cartesian=true, omit_recorddim_if_constant=true)
+    varray = PALEOmodel.get_array(
+        varfr, (expand_cartesian=true, squeeze_all_single_dims=false);
+        lookup_coords=false, add_attributes=false, omit_recorddim_if_constant=true
+    )
+    vdata = varray.values
+    vdata_dims = [nd.name for (nd, _) in varray.dims_coords]
 
     field_data = PALEOmodel.field_data(varfr)
     add_field_data_netcdf_dimensions(ds, field_data)

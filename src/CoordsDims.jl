@@ -12,6 +12,9 @@ These are generated from coordinate variables for use in output visualisation.
 
 N = 1: a cell-centre coordinate, size(values) = (ncells, )
 N = 2: a boundary coordinate, size(values) = (2, ncells)
+
+# Fields
+$(TYPEDFIELDS)
 """
 mutable struct FixedCoord{N}
     name::String

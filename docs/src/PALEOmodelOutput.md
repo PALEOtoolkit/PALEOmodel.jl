@@ -44,7 +44,7 @@ PB.has_variable(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString
 
 #### Accessing output data
 ```@docs
-PALEOmodel.get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; kwargs...)
+PALEOmodel.get_array(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString, allselectargs::NamedTuple; kwargs...)
 PB.get_field(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString)
 PB.get_data(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; records=nothing)
 PB.get_mesh(output::PALEOmodel.AbstractOutputWriter, domainname::AbstractString)
