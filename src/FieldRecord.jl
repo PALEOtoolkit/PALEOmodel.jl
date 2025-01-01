@@ -258,8 +258,8 @@ function PB.get_data(fr::FieldRecord; records=nothing)
 end  
 
 """    
-    get_array(fr::FieldRecord [, allselectargs::NamedTuple] [; coords::AbstractVector]) -> fa::FieldArray
-    [deprecated] get_array(fr::FieldRecord [; coords::AbstractVector] [; allselectargs...]) -> fa::FieldArray
+    get_array(fr::FieldRecord [, allselectargs::NamedTuple] ; kwargs...) -> fa::FieldArray
+    [deprecated] get_array(fr::FieldRecord [; kwargs...] [; allselectargs...]) -> fa::FieldArray
 
 Return a [`FieldArray`](@ref) containing an Array of values and
 any attached coordinates, for records and spatial region defined by `allselectargs`.
@@ -288,39 +288,59 @@ Some synonyms are defined for commonly used `<dimnamecoordname>`:
 | cells, cell | cells_isel              |                                                   |
 | column=<n>  | cells_isel = first:last | select range of cells corresponding to column n   |  
 
-Optional argument `coords` can be used to replace the attached coordinates for one or more dimensions.
-Format is a Vector of Pairs of `"<dim_name>"=>("<var_name1>", "<var_name2>", ...)`, 
-eg to replace an nD column atmosphere model default pressure coordinate with a z coordinate:
 
-    coords=["cells"=>("atm.zmid", "atm.zlower", "atm.zupper")]
-
-Optional argument `expand_cartesian` is only needed for spatially resolved output using a `CartesianLinearGrid`, and should be 
-set to `true` to expand compressed internal data (with spatial dimension `cells`) to a cartesian array (with spatial dimensions eg `lon`, `lat`, `zt`),
-
-Dimensions corresponding to a selection for a single index or coordinate value are always squeezed out from the returned [`FieldArray`](@ref).
+NB: Dimensions corresponding to a selection for a single index or coordinate value are always squeezed out from the returned [`FieldArray`](@ref).
 Optional argument `squeeze_all_single_dims` (default `true`) controls whether *all* output dimensions that contain a single index are
 squeezed out (including eg a selection for a range that results in a dimension with one index, or where the input `FieldRecord` contains a dimension 
 with a single index).
 
+Optional argument `expand_cartesian` (default `false`) is only needed for spatially resolved output using a `CartesianLinearGrid`, 
+set to `true` to expand compressed internal data (with spatial dimension `cells`) to a cartesian array  (with spatial dimensions eg `lon`, `lat`, `zt`)
+
 Selection arguments used are returned as strings in `fa.attributes` `filter_records` and `filter_region` for use in plot labelling etc.
 
+# Keyword arguments
+- `coords=nothing`: replace the attached coordinates from the input `fr::FieldRecord` for one or more dimensions.
+  Format is a Vector of Pairs of `"<dim_name>"=>("<var_name1>", "<var_name2>", ...)`, 
+  eg to replace an nD column atmosphere model default pressure coordinate with a z coordinate:
+
+      coords=["cells"=>("atm.zmid", "atm.zlower", "atm.zupper")]
+- `lookup_coordinates=true`: `true` to include coordinates, `false` to omit coordinates (both as selection options and in output `FieldArray`).
+- `add_attributes=true`: `true` to transfer attributes from input `fr::FieldRecord` to output `FieldArray`, `false` to omit.
+- `omit_recorddim_if_constant=false`: Specify whether to include multiple (identical) records and record dimension for constant variables
+   (with attribute `is_constant = true`). PALEO currently always stores these records in the input `fr::FieldRecord`; 
+   set `false` include them in `FieldArray` output, `true` to omit duplicate records and record dimension from output.
+  
 
 # Examples
-- select a timeseries for single cell index 3
+- select a timeseries for single cell index 3 :
 
       get_array(fr, (cell=3, ))
-- select first column at nearest available time to model time 10.0
+- select first column at nearest available time to model time 10.0 :
 
       get_array(fr, (column=1, tmodel=10.0))
 - set first column at nearest available time to model time 10.0, replacing atmosphere model pressure coordinate with z coordinate:
 
-      get_array(fr, (column=1, tmodel=10.0); coords=["cells"=>("atm.zmid", "atm.zlower", "atm.zupper")])
-- select surface 2D array (dimension `zt`, index 1) from 3D output at nearest available time to model time 10.0, expanding `CartesianLinearGrid`.
+      get_array(
+          fr, (column=1, tmodel=10.0);
+          coords=["cells"=>("atm.zmid", "atm.zlower", "atm.zupper")]
+      )
+- select surface 2D array (dimension `zt`, index 1) from 3D output at nearest available 
+    time to model time 10.0, expanding `CartesianLinearGrid`:
 
       get_array(fr, (zt_isel=1, tmodel=10.0, expand_cartesian=true))
-- select section 2D array at nearest index to longitude 200 degrees from 3D output at nearest available time to model time 10.0, expanding `CartesianLinearGrid`.
+- select section 2D array at nearest index to longitude 200 degrees from 3D output at nearest available 
+  time to model time 10.0, expanding `CartesianLinearGrid`:
 
       get_array(fr, (lon=200.0, tmodel=10.0, expand_cartesian=true))
+
+- get full data cube as used for netcdf output, omitting coordinates and attributes, retaining singleton dimensions, and omitting 
+  record dimension if variable is a constant:
+
+      get_array(
+          fr, (expand_cartesian=true, squeeze_all_single_dims=false);
+          lookup_coordinates=false, add_attributes=false, omit_recorddim_if_constant=true
+      )
 
 # Limitations
 
@@ -332,6 +352,12 @@ Selection arguments used are returned as strings in `fa.attributes` `filter_reco
 function get_array(
     @nospecialize(fr::FieldRecord); 
     coords=nothing,
+    expand_cartesian::Bool=false, # can be overridden in allselectargs
+    squeeze_all_single_dims::Bool=true, # can be overridden in allselectargs
+    lookup_coords::Bool=true, 
+    add_attributes::Bool=true, 
+    omit_recorddim_if_constant::Bool=false,
+    verbose::Bool=false,
     allselectargs...
 )
     isempty(allselectargs) ||
@@ -340,21 +366,27 @@ function get_array(
             :get_array,
         )
 
-    return get_array(fr, NamedTuple(allselectargs); coords=coords)
+    return get_array(
+        fr, NamedTuple(allselectargs); 
+        coords, expand_cartesian, squeeze_all_single_dims, lookup_coords, verbose, add_attributes, omit_recorddim_if_constant,
+    )
 end
 
 
 function get_array(
     @nospecialize(fr::FieldRecord), @nospecialize(allselectargs::NamedTuple); # allselectargs::NamedTuple=NamedTuple() creates a method ambiguity with deprecated form above
     coords=nothing,
-    expand_cartesian=false, # can be overridden in allselectargs
-    squeeze_all_single_dims=true, # can be overridden in allselectargs
-    verbose=false,
+    expand_cartesian::Bool=false, # can be overridden in allselectargs
+    squeeze_all_single_dims::Bool=true, # can be overridden in allselectargs
+    lookup_coords::Bool=true,
+    add_attributes::Bool=true,
+    omit_recorddim_if_constant::Bool=false, 
+    verbose::Bool=false,
 )
     frname = default_varnamefull(fr.attributes; include_selectargs=true)
     fa = nothing 
     try
-        verbose && @info "get_array (begin): $frname, allselectargs $allselectargs"
+        verbose && @info "get_array (begin): $frname, allselectargs $allselectargs lookup_coords $lookup_coords"
     
         if !isnothing(coords)
             check_coords_argument(coords) ||
@@ -406,21 +438,26 @@ function get_array(
         # indices in full array to use. Start with everything, then apply selections from 'allselectargs'
         select_indices = Any[1:(nd.size) for nd in dims]
 
-        # Record dimension
-
-        # read record coordinates
-        dims_coords[recorddimidx] = dims[recorddimidx] => _read_coordinates(
-            fr, dims[recorddimidx], nothing, expand_cartesian; substitute_coords=coords
-        )
-        
-        # keep track of selection used, to provide as attributes in FieldArray
-        selectargs_records = OrderedCollections.OrderedDict()
-        
-        _filter_dims_coords(
-            select_indices, dims_coords, recorddimidx, 
-            allselectargs_sort, selectargs_used,  selectargs_records,
-            fr,
-        )
+        # Record dimension       
+        selectargs_records = OrderedCollections.OrderedDict()  # keep track of selection used, to provide as attributes in FieldArray
+        is_constant = omit_recorddim_if_constant ? variable_is_constant(fr) : false
+        if !is_constant
+            # read record coordinates and apply selection
+            dims_coords[recorddimidx] = dims[recorddimidx] => lookup_coords ? _read_coordinates(
+                fr, dims[recorddimidx], nothing, expand_cartesian; substitute_coords=coords
+            ) : FixedCoord[]
+            
+            _filter_dims_coords(
+                select_indices, dims_coords, recorddimidx, 
+                allselectargs_sort, selectargs_used,  selectargs_records,
+                fr,
+            )
+        else
+            # use first record and squeeze out record dimension
+            select_indices[recorddimidx] = 1 # use first records (all records will be identical)
+            dims_coords[recorddimidx] = nothing  # dimension will be squeezed out
+            selectargs_records["is_constant"] = "true"
+        end
 
         # get record indices to use
         ridx_to_use = select_indices[recorddimidx]
@@ -430,10 +467,12 @@ function get_array(
 
         # read non-record coordinates, from first record selected
         for i in 1:(length(dims)-1)
-            dims_coords[i] = dims[i] => _read_coordinates(fr, dims[i], first(ridx_to_use), expand_cartesian; substitute_coords=coords)
+            dims_coords[i] = dims[i] => lookup_coords ? _read_coordinates(
+                fr, dims[i], first(ridx_to_use), expand_cartesian; substitute_coords=coords
+            ) : FixedCoord[]
         end
 
-        selectargs_region = OrderedCollections.OrderedDict()
+        selectargs_region = OrderedCollections.OrderedDict() # keep track of selection used, to provide as attributes in FieldArray
 
         _filter_dims_coords(
             select_indices, dims_coords, 1:length(dims)-1, 
@@ -483,15 +522,29 @@ function get_array(
 
         # create values array
         if field_single_element(fr)
-            if have_recorddim
-                avalues = fr.records[ridx_to_use]
+            @assert length(dims_coords) <= 2
+            if have_recorddim                
+                if length(dims_coords) == 1 || isnothing(dims_coords[1])
+                    # no spatial dimension
+                    avalues = fr.records[ridx_to_use]
+                else
+                    # eg a CellSpace variable in a Domain with no grid still has a spatial dimension size 1
+                    avalues = reshape(fr.records[ridx_to_use], 1, :)
+                end
             else
-                # represent a scalar as a 0D Array
-                avalues = Array{eltype(fr.records), 0}(undef)
-                avalues[] = fr.records[ridx_to_use]
+                if length(dims_coords) == 1 || isnothing(dims_coords[1])
+                    # no spatial dimension
+                    # represent a scalar as a 0D Array
+                    avalues = Array{eltype(fr.records), 0}(undef)
+                    avalues[] = fr.records[ridx_to_use]
+                else
+                    # eg a CellSpace variable in a Domain with no grid still has a spatial dimension size 1
+                    # represent as a 1D Array 
+                    avalues = [fr.records[ridx_to_use]]
+                end
             end
         else        
-            if expand_cartesian && !isempty(dims_spatial)
+            if expand_cartesian && PB.has_internal_cartesian(fr.mesh, space(fr)) # !isempty(dims_spatial)
                 expand_fn = x -> PB.Grids.internal_to_cartesian(fr.mesh, x)
                 aeltype = Union{Missing, eltype(first(fr.records))}
             else
@@ -499,34 +552,33 @@ function get_array(
                 aeltype = eltype(first(fr.records))
             end
             avalues = Array{aeltype, length(dims_sq)}(undef, [nd.size for nd in dims_sq]...)
-            if have_recorddim            
-                for (riselect, ri) in enumerate(ridx_to_use)
-                    if isempty(nonrecordindicies_sq)
-                        avalues[riselect] = expand_fn(fr.records[ri])[nonrecordindicies...]
-                    else
-                        avalues[nonrecordindicies_sq..., riselect] .= expand_fn(fr.records[ri])[nonrecordindicies...]
-                    end
-                end
+            if have_recorddim
+                _fill_array_from_records(avalues, Tuple(nonrecordindicies_sq), fr.records, expand_fn, ridx_to_use, Tuple(nonrecordindicies))
             else
                 if isempty(nonrecordindicies_sq)
-                    avalues[] = expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
+                    avalues[] .= @view expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
                 else
-                    avalues[nonrecordindicies_sq...] .= expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
+                    avalues[nonrecordindicies_sq...] .= @view expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
                 end
             end
         end
         
-        # add attributes for selection used
-        attributes = copy(fr.attributes)
-        if !isempty(selectargs_records)
-            attributes[:filter_records] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_records)
-        end
-        if !isempty(selectargs_region)
-            attributes[:filter_region] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_region)
-        end
+        if add_attributes
+            # add attributes for selection used
+            attributes = copy(fr.attributes)
+            if !isempty(selectargs_records)
+                attributes[:filter_records] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_records)
+            end
+            if !isempty(selectargs_region)
+                attributes[:filter_region] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_region)
+            end
 
-        # Generate name from attributes, including selection suffixes
-        name = default_varnamefull(attributes; include_selectargs=true)
+            # Generate name from attributes, including selection suffixes
+            name = default_varnamefull(attributes; include_selectargs=true)
+        else
+            attributes = nothing
+            name = ""
+        end
 
         verbose && @info "get_array (end): $frname -> $name, allselectargs $allselectargs"
 
@@ -542,6 +594,18 @@ function get_array(
     end
 
     return fa
+end
+
+# function barrier optimisation
+function _fill_array_from_records(avalues, nonrecordindicies_sq, records, expand_fn, ridx_to_use, nonrecordindicies)
+    for (riselect, ri) in enumerate(ridx_to_use)
+        if isempty(nonrecordindicies_sq)
+            avalues[riselect] = expand_fn(records[ri])[nonrecordindicies...]
+        else
+            avalues[nonrecordindicies_sq..., riselect] .= @view expand_fn(records[ri])[nonrecordindicies...]
+        end
+    end
+    return nothing
 end
 
 # check 'coords' of form [] or ["z"=>[ ... ], ] or ["z"=>(...),]
@@ -668,78 +732,24 @@ end
 
 
 """
-    get_array_full(fr::FieldRecord; [expand_cartesian=false], [omit_recorddim_if_constant=true]) 
-        -> avalues::Array, (avalues_dimnames...)
-
-Return all records as an n-dimensional Array, with a Tuple of dimension names
-
-If `omit_recorddim_if_constant`, squeeze out record dimension if `variable_is_constant(fr) == true`.
-"""
-function get_array_full(@nospecialize(fr::FieldRecord); expand_cartesian=false, omit_recorddim_if_constant=true)
-
-    if omit_recorddim_if_constant
-        is_constant = variable_is_constant(fr)
-    else
-        is_constant = false
-    end
-
-    dims_all = PB.get_dimensions(fr; expand_cartesian)
-
-    # create values array
-    if field_single_element(fr)
-        if is_constant
-            # represent a scalar as a 0D Array
-            avalues = Array{eltype(fr.records), 0}(undef)
-            avalues[] = fr.records[1]
-            avalues_dimnames = ()
-        else
-            avalues = fr.records
-            # we may have squeezed out a cells dimension for the case of a CellSpace field in a domain with no grid
-            avalues_dimnames = (dims_all[end].name, )
-        end
-    else        
-        if expand_cartesian && PB.has_internal_cartesian(fr.mesh, space(fr))
-            expand_fn = x -> PB.Grids.internal_to_cartesian(fr.mesh, x)
-            aeltype = Union{Missing, eltype(first(fr.records))}
-        else
-            expand_fn = identity
-            aeltype = eltype(first(fr.records))
-        end
-        
-        acolons_no_recorddim = ntuple(x->Colon(), length(dims_all)-1)
-
-        if is_constant
-            avalues = Array{aeltype, length(dims_all)-1}(undef, [nd.size for nd in dims_all[1:end-1]]...)
-            avalues[acolons_no_recorddim...] .= expand_fn(fr.records[1])
-        else
-            avalues = Array{aeltype, length(dims_all)}(undef, [nd.size for nd in dims_all]...)
-            _copy_array_from_records!(avalues, acolons_no_recorddim, fr, expand_fn)      
-        end
-
-        last_dim_idx = is_constant ? length(dims_all) - 1 : length(dims_all)
-        avalues_dimnames = Tuple(nd.name for nd in dims_all[1:last_dim_idx])
-    end
-
-    return avalues, avalues_dimnames
-end
-
-# function barrier optimisation
-function _copy_array_from_records!(avalues, acolons_no_recorddim, fr, expand_fn)
-    for ri in 1:length(fr)
-        avalues[acolons_no_recorddim..., ri] .= expand_fn(fr.records[ri])
-    end
-    return avalues
-end
-
-"""
     FieldRecord(dataset, avalues::Array, avalues_dimnames, attributes::Dict{Symbol, Any}; [expand_cartesian=false])
 
-Create from an Array of data values `avalues` (inverse of [`get_array_full`](@ref))
+Create from an Array of data values `avalues`.
 
 FieldRecord type and dimensions are set from a combination of `attributes` and `dataset` dimensions and grid, where
 `Space = attributes[:space]`, `FieldData = attributes[:field_data]`, `data_dims` are set from names in `attributes[:data_dims]`.
 
 Dimension names and size are cross-checked against supplied names in `avalues_dimnames`
+
+This is effectively the inverse of:
+
+    a = get_array(
+        fr::FieldRecord, (expand_cartesian, squeeze_all_single_dims=false);
+        lookup_coordinates=false, add_attributes=false, omit_recorddim_if_constant=true,
+    )
+    avalues = a.values
+    avalues_dimnames = [nd.name for (nd, _) in a.dims_coords]
+    attributes = fr.attributes
 """
 function FieldRecord(
     dataset,
@@ -753,10 +763,6 @@ function FieldRecord(
     data_dim_names = attributes[:data_dims]
 
     dims_spatial_expected = PB.get_dimensions(dataset.grid, Space; expand_cartesian)
-    # we may have squeezed out a cells dimension for the case of a CellSpace field in a domain with no grid
-    if field_single_element(FieldData, length(data_dim_names), Space, typeof(dataset.grid))
-        dims_spatial_expected = []
-    end
     
     dataset_dims_all = PB.get_dimensions(dataset)
  
@@ -775,17 +781,38 @@ function FieldRecord(
     if !is_constant
         push!(dims_expected, record_dim)
     end
-    @assert length(avalues_dimnames) == length(dims_expected)
-    for i in 1:length(avalues_dimnames)
-        @assert avalues_dimnames[i] == dims_expected[i].name
-        @assert size(avalues, i) == dims_expected[i].size
+    if length(avalues_dimnames) == length(dims_expected)   
+        for i in 1:length(avalues_dimnames)
+            @assert avalues_dimnames[i] == dims_expected[i].name
+            @assert size(avalues, i) == dims_expected[i].size
+        end
+    else
+        length_expected = prod(nd->nd.size, dims_expected)
+        errmsg = "var $(attributes[:domain_name]).$(attributes[:var_name]) netcdf dimensions $avalues_dimnames $(size(avalues)) != dims_expected $dims_expected"
+        if length(avalues) == length_expected
+            @warn "$errmsg but length is the same - continuing"
+        else
+            error(errmsg)
+        end
     end
 
     if field_single_element(FieldData, length(data_dims), Space, typeof(dataset.grid))
         if is_constant
-            records = fill(avalues[], record_dim.size)  #  avalues is 0D Array if is_constant == true
+            @assert length(avalues) == 1
+            #  avalues is 0D Array if a scalar variable
+            #  avalues is a Vector length 1 if a CellSpace variable in a Domain with no grid
+            records = fill(avalues[], record_dim.size)  
         else
-            records = avalues
+            @assert length(dims_spatial_expected) <= 1
+            if isempty(dims_spatial_expected)
+                # scalar variable
+                records = avalues
+            elseif length(dims_spatial_expected) == 1
+                # eg a CellSpace variable in a Domain with no grid still has a spatial dimension size 1
+                # avalues will be a Matrix size(1, nrecs)
+                @assert only(dims_spatial_expected).size == 1
+                records = vec(avalues)
+            end
         end
     else
         if expand_cartesian && PB.has_internal_cartesian(dataset.grid, Space)
