@@ -485,7 +485,7 @@ end
 #########################################################
 
 """
-    build_coords_edges(coords_vec::Vector{FixedCoord}) -> Vector{Float64}
+    build_coords_edges(coords_vec::Vector{FieldArray}) -> Vector{Float64}
 
 Build a vector of coordinate edges (length `n+1``) from `coords_vec`, assuming the PALEO
 convention that `coords_vec` contains three elements with 
@@ -493,7 +493,7 @@ cell midpoints, lower edges, upper edges each of length `n`, in that order.
 
 Falls back to just returning the first entry in `coords_vec` for other cases.
 """
-function build_coords_edges(dim::PB.NamedDimension, coords_vec::Vector{FixedCoord})
+function build_coords_edges(dim::PB.NamedDimension, coords_vec::Vector{FieldArray})
 
     if isempty(coords_vec)
         # no coordinate - just return indices

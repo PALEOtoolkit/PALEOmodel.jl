@@ -63,9 +63,9 @@ include("SteadyState.jl")
 
 include("SteadyStateKinsol.jl")
 
-include("CoordsDims.jl") 
-
 include("FieldArray.jl")
+
+include("CoordsDims.jl") 
 
 include("FieldRecord.jl")
 

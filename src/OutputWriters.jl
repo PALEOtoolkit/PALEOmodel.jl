@@ -931,10 +931,6 @@ function save_netcdf(
             grid_to_netcdf!(dsg, odom.grid)
 
             # data_dims
-            # TODO these are NamedDimension with attached FixedCoord, where
-            # the FixedCoord may not be present as a variable in the data,
-            # and may also not have the correct name or even a unique name !
-            # As a workaround, we generate a unique name from dim_name * coord_name, and add the Variable
             data_dim_names = String[d.name for d in odom.data_dims]
             dsg.attrib["data_dims"] = data_dim_names
             coordnames_to_netcdf(dsg, "data_dims_coords", odom.data_dims_coordinates)            
