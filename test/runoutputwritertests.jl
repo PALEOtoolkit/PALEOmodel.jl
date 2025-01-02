@@ -38,6 +38,14 @@ end
     all_values.global.O .= [4e19]
     PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 1.0)
 
+    O_data = PB.get_data(output, "global.O")
+    @test O_data isa Vector{Float64}
+    @test O_data == [2e19, 4e19]
+
+    O_data_rec2 = PB.get_data(output, "global.O"; records=2)
+    @test O_data_rec2 isa Vector{Float64}  # Vector, not a 0D Array !
+    @test O_data_rec2 == [4e19]
+
     O_array = PALEOmodel.get_array(output, "global.O")
     @test O_array.values == [2e19, 4e19]
 
@@ -60,25 +68,22 @@ end
 
 end
 
-# @testset "SaveLoad_jld2" begin
+@testset "SaveLoad_jld2" begin
 
-#     model, modeldata, all_vars, output =  create_test_model_output(2)
-#     all_values = all_vars.values
+    model, modeldata, all_vars, output =  create_test_model_output(2)
+    all_values = all_vars.values
 
-#     all_values.global.O .= [2e19]
-#     PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
-#     all_values.global.O .= [4e19]
-#     PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
+    all_values.global.O .= [2e19]
+    PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
+    all_values.global.O .= [4e19]
+    PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
 
-#     tmpfile = tempname(; cleanup=true) 
-#     PALEOmodel.OutputWriters.save_jld2(output, tmpfile)
+    tmpfile = tempname(; cleanup=true) 
+    @test_throws str->occursin("save_jld2 has been removed", str) PALEOmodel.OutputWriters.save_jld2(output, tmpfile)
 
-#     load_output = PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
+    @test_throws str->occursin("load_jld2! has been removed", str)  PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
 
-#     O_array = PALEOmodel.get_array(load_output, "global.O")
-#     @test O_array.values == [2e19, 4e19]
-
-# end
+end
 
 @testset "SaveLoad_netcdf" begin
 

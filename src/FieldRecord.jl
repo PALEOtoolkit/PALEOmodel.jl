@@ -245,10 +245,10 @@ function PB.get_data(fr::FieldRecord; records=nothing)
         # if isa(records, Integer) && !isa(data_output, AbstractVector)
         #     data_output =[data_output]
         # 
-        if isa(records, Integer) && field_single_element(fr)            
-            # represent a scalar as a 0D Array
-            data_output = Array{eltype(fr.records), 0}(undef)
-            data_output[] = fr.records[records]
+        if isa(records, Integer) && field_single_element(fr)
+            # represent a scalar as a length 1 Vector
+            # (a 0D Array might be more logical, but for backwards compatibility keep as a Vector)
+            data_output =[fr.records[records]]
         else
             data_output = fr.records[records]
         end
