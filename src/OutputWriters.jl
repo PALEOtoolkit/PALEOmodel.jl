@@ -656,8 +656,7 @@ Save to `filename` in JLD2 format (NB: filename must either have no extension or
 """
 function save_jld2(output::OutputMemory, filename)
 
-    @error """save_jld2 has been removed in PALEOmodel v0.16
-              Please use save_netcdf instead"""
+    error("save_jld2 has been removed in PALEOmodel v0.16 - please use save_netcdf instead")
 
     return nothing
 end
@@ -673,9 +672,11 @@ Load from `filename` in JLD2 format, replacing any existing content in `output`.
 """
 function load_jld2!(output::OutputMemory, filename)
 
-   @error """load_jld2! has been removed in PALEOmodel v0.16.
-             Please use save_netcdf, load_netcdf! for new output,
-             or use an earlier version of PALEOmodel to load jld2 output and save to netcdf."""
+   error(
+    """load_jld2! has been removed in PALEOmodel v0.16.
+    Please use save_netcdf, load_netcdf! for new output,
+    or use an earlier version of PALEOmodel to load jld2 output and save to netcdf."""
+   )
 
     return nothing
 end
