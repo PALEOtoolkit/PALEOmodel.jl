@@ -1,3 +1,4 @@
+import Infiltrator
 """
     FieldRecord{FieldData <: AbstractData, Space <: AbstractSpace, V, N, Mesh, R}
     FieldRecord(dataset, f::PB.Field, attributes; [sizehint=nothing])
@@ -307,6 +308,8 @@ Selection arguments used are returned as strings in `fa.attributes` `filter_reco
       coords=["cells"=>("atm.zmid", "atm.zlower", "atm.zupper")]
 - `lookup_coordinates=true`: `true` to include coordinates, `false` to omit coordinates (both as selection options and in output `FieldArray`).
 - `add_attributes=true`: `true` to transfer attributes from input `fr::FieldRecord` to output `FieldArray`, `false` to omit.
+- `update_name=true`: `true` to update output `FieldArray` name to add Domain name prefix and suffix generated from `allselectargs` (NB: requires `add_attributes=true`), 
+  `false` to use name from input FieldRecord.
 - `omit_recorddim_if_constant=false`: Specify whether to include multiple (identical) records and record dimension for constant variables
    (with attribute `is_constant = true`). PALEO currently always stores these records in the input `fr::FieldRecord`; 
    set `false` include them in `FieldArray` output, `true` to omit duplicate records and record dimension from output.
@@ -343,11 +346,11 @@ Selection arguments used are returned as strings in `fa.attributes` `filter_reco
       )
 
 # Limitations
-
+- it is only possible to select either a single slice or a contiguous range for each dimension, not a set of slices for a Vector of index
+  or coordinate values.
 - time-varying coordinates (eg a z coordinate in an atmosphere climate model) are not fully handled. If a single record is selected, the correct
   values for the coordinate at that time will be returned, but if multiple records are selected, the coordinate will be incorrectly fixed to the
   values at the time corresponding to the first record.
-
 """
 function get_array(
     @nospecialize(fr::FieldRecord); 
@@ -355,7 +358,8 @@ function get_array(
     expand_cartesian::Bool=false, # can be overridden in allselectargs
     squeeze_all_single_dims::Bool=true, # can be overridden in allselectargs
     lookup_coords::Bool=true, 
-    add_attributes::Bool=true, 
+    add_attributes::Bool=true,
+    update_name=true,
     omit_recorddim_if_constant::Bool=false,
     verbose::Bool=false,
     allselectargs...
@@ -368,7 +372,7 @@ function get_array(
 
     return get_array(
         fr, NamedTuple(allselectargs); 
-        coords, expand_cartesian, squeeze_all_single_dims, lookup_coords, verbose, add_attributes, omit_recorddim_if_constant,
+        coords, expand_cartesian, squeeze_all_single_dims, lookup_coords, add_attributes, update_name, omit_recorddim_if_constant, verbose,
     )
 end
 
@@ -380,13 +384,15 @@ function get_array(
     squeeze_all_single_dims::Bool=true, # can be overridden in allselectargs
     lookup_coords::Bool=true,
     add_attributes::Bool=true,
+    update_name=true,
     omit_recorddim_if_constant::Bool=false, 
     verbose::Bool=false,
 )
     frname = default_varnamefull(fr.attributes; include_selectargs=true)
-    fa = nothing 
+    fa = nothing
+    # @Infiltrator.infiltrate
     try
-        verbose && @info "get_array (begin): $frname, allselectargs $allselectargs lookup_coords $lookup_coords"
+        verbose && println("get_array (begin): $frname, allselectargs $allselectargs lookup_coords $lookup_coords")
     
         if !isnothing(coords)
             check_coords_argument(coords) ||
@@ -445,7 +451,7 @@ function get_array(
             # read record coordinates and apply selection
             dims_coords[recorddimidx] = dims[recorddimidx] => lookup_coords ? _read_coordinates(
                 fr, dims[recorddimidx], nothing, expand_cartesian; substitute_coords=coords
-            ) : FixedCoord[]
+            ) : FieldArray[]
             
             _filter_dims_coords(
                 select_indices, dims_coords, recorddimidx, 
@@ -469,7 +475,7 @@ function get_array(
         for i in 1:(length(dims)-1)
             dims_coords[i] = dims[i] => lookup_coords ? _read_coordinates(
                 fr, dims[i], first(ridx_to_use), expand_cartesian; substitute_coords=coords
-            ) : FixedCoord[]
+            ) : FieldArray[]
         end
 
         selectargs_region = OrderedCollections.OrderedDict() # keep track of selection used, to provide as attributes in FieldArray
@@ -482,7 +488,11 @@ function get_array(
 
         unused_selectargs = [a for (a, u) in zip(allselectargs_sort, selectargs_used) if !u]
         isempty(unused_selectargs) ||
-            error("allselectargs contains select filter(s) $unused_selectargs that do not match any dimensions or coordinates !")
+            error(
+                "allselectargs contains select filter(s) ", unused_selectargs, " that do not match any dimensions or coordinates !\n",
+                "allselectargs_sort: ", allselectargs_sort, "\n",
+                "selectargs_used: ", selectargs_used
+            )
 
         #############################################
         # squeeze out dimensions and coordinates
@@ -493,7 +503,7 @@ function get_array(
         if squeeze_all_single_dims
             for i in eachindex(dims_coords, select_indices)
                 if !isnothing(dims_coords[i]) && dims_coords[i][1].size == 1
-                    verbose && @info "get_array: $frname squeezing out dimension $(dims_coords[i][1].name)"
+                    verbose && println("get_array: $frname squeezing out dimension $(dims_coords[i][1].name)")
                     @assert !isa(select_indices[i], Number)
                     @assert length(select_indices[i]) == 1
                     dims_coords[i] = nothing
@@ -502,7 +512,7 @@ function get_array(
             end
         end
 
-        dims_coords_sq = Pair{PB.NamedDimension, Vector{PALEOmodel.FixedCoord}}[dc for dc in dims_coords if !isnothing(dc)]
+        dims_coords_sq = Pair{PB.NamedDimension, Vector{FieldArray}}[dc for dc in dims_coords if !isnothing(dc)]
         dims_sq = [d for (d, c) in dims_coords_sq]
 
         # get non-record dimensions indices to use
@@ -572,15 +582,19 @@ function get_array(
             if !isempty(selectargs_region)
                 attributes[:filter_region] = NamedTuple(Symbol(k)=>v for (k, v) in selectargs_region)
             end
-
-            # Generate name from attributes, including selection suffixes
-            name = default_varnamefull(attributes; include_selectargs=true)
+            if update_name # Generate name from attributes, including selection suffixes
+                name = default_varnamefull(attributes; include_selectargs=true)
+            else
+                name = fr.name
+            end
         else
             attributes = nothing
-            name = ""
+            name = fr.name
         end
 
-        verbose && @info "get_array (end): $frname -> $name, allselectargs $allselectargs"
+       
+
+        verbose && println("get_array (end): $frname -> $name, allselectargs $allselectargs")
 
         fa = FieldArray(
             name,
@@ -639,11 +653,17 @@ function _read_coordinates(
         coord_names = PB.get_coordinates(fr, dim.name; expand_cartesian)
     end
 
-    coords = FixedCoord[]
+    coords = FieldArray[]
     for cn in coord_names
         cfr = PB.get_field(fr.dataset, cn)
-        coord_values = isnothing(ridx_to_use) ? cfr.records : cfr.records[ridx_to_use]
-        push!(coords, FixedCoord(cn, coord_values, cfr.attributes))
+        if isnothing(ridx_to_use)
+            coord = get_array(cfr; lookup_coords=false, update_name=false)
+        else
+            coord = get_array(cfr, (records=ridx_to_use, ); lookup_coords=false, update_name=false)
+        end
+        is_coordinate(coord, dim) ||
+            error("dimension $dim coord name $cn read invalid coordinate $coord")
+        push!(coords, coord)
     end
     return coords
 end

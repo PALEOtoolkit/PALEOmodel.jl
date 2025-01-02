@@ -76,12 +76,11 @@ load_netcdf!
 ```@meta
 CurrentModule = PALEOmodel
 ```
-[`FieldArray`](@ref) provides a generic array type with named dimensions `PALEOboxes.NamedDimension` and optional coordinates [`PALEOmodel.FixedCoord`](@ref) for processing of model output.
+[`FieldArray`](@ref) provides a generic array type with named dimensions `PALEOboxes.NamedDimension` each with optional coordinates for processing of model output.
 
 ```@docs
 FieldArray
 get_array(fr::FieldRecord)
-FixedCoord
 ```
 
 ## Plotting output

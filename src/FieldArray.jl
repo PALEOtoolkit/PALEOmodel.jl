@@ -17,35 +17,38 @@ struct FieldArray{T <: AbstractArray}
     "n-dimensional Array of values"
     values::T
     "Names of dimensions with optional attached coordinates"
-    dims_coords::Vector{Pair{PB.NamedDimension, Vector{FixedCoord}}}
+    dims_coords::Vector{Pair{PB.NamedDimension, Vector{FieldArray}}}
     "variable attributes"
     attributes::Union{Dict{Symbol, Any}, Nothing}
 end
 
+
 PB.get_dimensions(f::FieldArray) = PB.NamedDimension[first(dc) for dc in f.dims_coords]
 
 function Base.show(io::IO, fa::FieldArray)
+    get(io, :typeinfo, nothing) === FieldArray || print(io, "FieldArray")
     print(io, 
-        "FieldArray(name=\"", fa.name, "\", eltype=", eltype(fa.values), ", size=", size(fa.values), ", dims_coords=", fa.dims_coords, ")"
+        "(name=\"", fa.name, "\", eltype=", eltype(fa.values), ", size=", size(fa.values), ", dims_coords=["
     )
+    for (i, (nd, coords)) in enumerate(fa.dims_coords)
+        print(IOContext(io, :typeinfo=>PB.NamedDimension), nd)
+        isempty(coords) || print(io, " => ", [c.name for c in coords])
+        i == length(fa.dims_coords) || print(io, ", ")
+    end
+    print(io, "])")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", fa::FieldArray)
     println(io, "FieldArray(name=\"", fa.name, "\", eltype=", eltype(fa.values),  ", size=", size(fa.values), ")")
-    # println(io, "  dims_coords:")
-    # for (nd, coords) in fa.dims_coords
-    #     println(io, "    ", nd, " => ")
-    #     for c in coords
-    #         println(io, "        ", c)
-    #     end
-    # end
-
     println(io, "  dims_coords:")
     for (nd, coords) in fa.dims_coords
-        println(io, "    ", nd, " => ", [c.name for c in coords])
+        print(IOContext(io, :typeinfo=>PB.NamedDimension), "     ", nd)
+        isempty(coords) || print(io, " => ", [c.name for c in coords])
+        println()
     end
     println(io, "  attributes: ", fa.attributes)
 end
+
 
 # basic arithmetic operations
 function Base.:*(fa_in::FieldArray, a::Real)
