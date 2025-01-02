@@ -134,8 +134,11 @@ function set_statevar_from_output!(modeldata, output::AbstractOutputWriter)
             @info "  initialising Variable $domname.$varname from output record $pickup_record"
             vardata = PB.get_data(statevar, modeldata)
             pickup_data = PB.get_data(output, domname*"."*varname, records=pickup_record)
-            typeof(vardata) == typeof(pickup_data) ||
-                error("output Variable $domname.$varname has different type $(typeof(vardata)) != $(typeof(pickup_data))")
+            if typeof(vardata) != typeof(pickup_data)
+                # warn and continue - will fail later if broadcast doesn't work
+                @warn "output Variable $domname.$varname (type $(typeof(vardata)) size $(size(vardata)), length $(length(vardata)))"*
+                    " has different type to pickup data (type $(typeof(pickup_data)) size $(size(pickup_data)) length ($(length(pickup_data))))"
+            end
             vardata .= pickup_data
         else
             @info "  Variable $domname.$varname not present in output - leaving default initialisation"
