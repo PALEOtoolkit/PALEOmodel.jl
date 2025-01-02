@@ -78,11 +78,12 @@ end
     all_values.global.O .= [4e19]
     PALEOmodel.OutputWriters.add_record!(output, model, modeldata, 0.0)
 
-    tmpfile = tempname(; cleanup=true) 
-    @test_throws str->occursin("save_jld2 has been removed", str) PALEOmodel.OutputWriters.save_jld2(output, tmpfile)
+    tmpfile = tempname(; cleanup=true)
+    if VERSION >= v"1.8" # this form of @test_throws requires Julia 1.8
+        @test_throws str->occursin("save_jld2 has been removed", str) PALEOmodel.OutputWriters.save_jld2(output, tmpfile)
 
-    @test_throws str->occursin("load_jld2! has been removed", str)  PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
-
+        @test_throws str->occursin("load_jld2! has been removed", str)  PALEOmodel.OutputWriters.load_jld2!(PALEOmodel.OutputWriters.OutputMemory(), tmpfile)
+    end
 end
 
 @testset "SaveLoad_netcdf" begin
