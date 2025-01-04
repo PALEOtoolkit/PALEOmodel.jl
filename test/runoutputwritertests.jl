@@ -164,7 +164,7 @@ end
     # add a diagnostic
     fr_O = PB.get_field(output, "global.O")
     my_diag = copy(fr_O)
-    my_diag.records .= -42.0
+    my_diag.records .= -42.0 # TODO directly accessing records is only valid for scalar data
     my_diag.attributes[:var_name] = "my_diag"
     my_diag.attributes[:description] = "a model diagnostic calculated from global.O"
     PB.add_field!(diag, my_diag)

@@ -230,26 +230,53 @@ function Base.copy(fr::FieldRecord{FieldData, Space, V, N, Mesh, R}) where {Fiel
 end
 
 """
-    PB.get_data(fr::FieldRecord; records=nothing)
+    PB.get_data(fr::FieldRecord; records=nothing, squeeze_all_single_dims=true)
 
-Get data records in raw format.
+Get data records in raw format. Only recommended for variables with scalar data ie one value per record.
 
 `records` may be `nothing` to get all records, 
 an `Int` to select a single record, or a range to select multiple records.
+
+If `squeeze_all_single_dims=true` (the default), if each record represents a scalar
+(eg a PALEO Variable with Space PB.ScalarSpace, or a PB.CellSpace variable in a Domain with
+a single cell), then data is returned as a Julia Vector. NB: if `records` is an Int,
+the single record requested is returned as a length-1 Vector.
+
+Non-scalar data (eg a non-ScalarSpace variable from a Domain with > 1 cell) 
+is returned in internal format as a Vector-of-Vectors.
 """    
-function PB.get_data(fr::FieldRecord; records=nothing)
+function PB.get_data(fr::FieldRecord; records=nothing, squeeze_all_single_dims=true)
     
-    if isnothing(records)
-        data_output = fr.records
-    else        
-        # bodge - fix scalar data
-        # if isa(records, Integer) && !isa(data_output, AbstractVector)
-        #     data_output =[data_output]
-        # 
-        if isa(records, Integer) && field_single_element(fr)
-            # represent a scalar as a length 1 Vector
-            # (a 0D Array might be more logical, but for backwards compatibility keep as a Vector)
-            data_output =[fr.records[records]]
+    # Optionally squeeze out single cell stored internally as a Vector-of-Vectors, length 1 
+    # (eg a CellSpace Variable in a Domain with 1 cell)
+    squeeze_vecvec = squeeze_all_single_dims && !isempty(fr.records) && length(first(fr.records)) == 1
+    if field_single_element(fr) || squeeze_vecvec
+        if field_single_element(fr)
+            # internal format already is a Vector
+            records_vec = fr.records
+        else
+            # combine Vector of length 1 Vectors into a Vector
+            records_vec = [only(r) for r in fr.records]
+        end        
+        if isnothing(records)
+            data_output = records_vec
+        else        
+            # bodge - fix scalar data
+            # if isa(records, Integer) && !isa(data_output, AbstractVector)
+            #     data_output =[data_output]
+            # 
+            if isa(records, Integer)
+                # represent a scalar as a length 1 Vector
+                # (a 0D Array might be more logical, but for backwards compatibility keep as a Vector)
+                data_output =[records_vec[records]]
+            else
+                data_output = records_vec[records]
+            end
+        end
+    else
+        # Vector-of-Vectors - return raw data
+        if isnothing(records)
+            data_output = fr.records
         else
             data_output = fr.records[records]
         end
@@ -467,8 +494,7 @@ function get_array(
 
         # get record indices to use
         ridx_to_use = select_indices[recorddimidx]
-        have_recorddim = !isnothing(dims_coords[recorddimidx])
-
+       
         # Non-record dimensions
 
         # read non-record coordinates, from first record selected
@@ -510,7 +536,11 @@ function get_array(
                     select_indices[i] = first(select_indices[i])
                 end
             end
+            # record dimension may have just been squeezed out
+            ridx_to_use = select_indices[recorddimidx]
         end
+        
+        have_recorddim = !isnothing(dims_coords[recorddimidx])
 
         dims_coords_sq = Pair{PB.NamedDimension, Vector{FieldArray}}[dc for dc in dims_coords if !isnothing(dc)]
         dims_sq = [d for (d, c) in dims_coords_sq]
@@ -566,7 +596,7 @@ function get_array(
                 _fill_array_from_records(avalues, Tuple(nonrecordindicies_sq), fr.records, expand_fn, ridx_to_use, Tuple(nonrecordindicies))
             else
                 if isempty(nonrecordindicies_sq)
-                    avalues[] .= @view expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
+                    avalues[] = expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
                 else
                     avalues[nonrecordindicies_sq...] .= @view expand_fn(fr.records[ridx_to_use])[nonrecordindicies...]
                 end
