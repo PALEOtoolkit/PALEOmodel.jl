@@ -267,7 +267,7 @@ with the Vector index prepended to `labelprefix` to identify the plot series (un
 - `labelattribute=nothing`: FieldArray attribute to use as label
 """
 RecipesBase.@recipe function f(
-    fa::FieldArray;
+    @nospecialize(fa::FieldArray);
     swap_xy=false,
     mult_y_coord=1.0, 
     structfield=nothing,

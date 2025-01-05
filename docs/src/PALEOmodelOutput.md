@@ -81,6 +81,8 @@ CurrentModule = PALEOmodel
 
 ```@docs
 FieldArray
+FieldArray(fr::FieldRecord)
+select(fa::FieldArray)
 get_array(fr::FieldRecord)
 ```
 
