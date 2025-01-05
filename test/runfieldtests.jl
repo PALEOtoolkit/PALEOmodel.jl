@@ -120,7 +120,7 @@ end
         @test PB.get_data(fr; records=1) == [42.0]
         fra = PALEOmodel.get_array(fr; squeeze_all_single_dims=false)
         @test size(fra.values) == (1, 1)
-        @test fra.values == [42.0;;] # 1×1 Matrix{Float64}
+        @test fra.values == reshape([42.0], 1, 1) # 1×1 Matrix{Float64}
         fra_dimensions = PB.get_dimensions(fra)
         @test length(fra_dimensions) == 2
         @test fra_dimensions[1].name == "cells"
@@ -245,7 +245,7 @@ end
         # FieldArray from FieldRecord - records dim not squeezed out
         fra = PALEOmodel.get_array(fr; squeeze_all_single_dims=false)
         @test size(fra.values) == (2, 1)
-        @test fra.values == [42.0 ; 43.0;;] # 2×1 Matrix{Float64}
+        @test fra.values == reshape([42.0, 43.0], 2, 1) # 2×1 Matrix{Float64}
         fra_dimensions = PB.get_dimensions(fra)
         @test length(fra_dimensions) == 2
         @test fra_dimensions[1].name == "test"
