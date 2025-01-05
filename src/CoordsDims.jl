@@ -1,14 +1,27 @@
-
-
-
 ##################################################################
 # Coordinate filtering and selection
 ################################################################
 
+# test whether c::FieldArray is a valid coordinate for dimension nd
+# ie c.dims_coords contains dimension nd
+function is_coordinate(c::FieldArray, nd::PB.NamedDimension)
+    c_has_nd = false
+    for (c_nd, _) in c.dims_coords
+        if c_nd == nd
+            c_has_nd = true
+        end
+    end
+
+    return c_has_nd
+end
+
+is_boundary_coordinate(c::FieldArray) =
+    length(c.dims_coords) > 1 && c.dims_coords[1][1] == PB.NamedDimension("bnds", 2)
+
 "find indices of coord from first before range[1] to first after range[2]"
-function find_indices(coord_values::AbstractVector, range)
+function _find_indices(coord_values::AbstractVector, range)
     length(range) == 2 ||
-        throw(ArgumentError("find_indices: length(range) != 2  $range"))
+        throw(ArgumentError("_find_indices: length(range) != 2  $range"))
 
     idxstart = findlast(t -> t<=range[1], coord_values)
     isnothing(idxstart) && (idxstart = 1)
@@ -20,7 +33,7 @@ function find_indices(coord_values::AbstractVector, range)
 end
 
 "find indices of coord nearest val"
-function find_indices(coord_values::AbstractVector, val::Real)
+function _find_indices(coord_values::AbstractVector, val::Real)
     idx = 1
     for i in 1:length(coord_values)
         if abs(coord_values[i] - val) < abs(coord_values[idx] - val)
@@ -32,74 +45,85 @@ function find_indices(coord_values::AbstractVector, val::Real)
 end
 
 """
-    dimscoord_subset(dim::PB.NamedDimension, coords::Vector{FieldArray}, select_dimvals::AbstractString, select_filter)
-        -> cidx, dim_subset, coords_subset, coords_used
+    _dim_subset(dim::PB.NamedDimension, coords::Vector{FieldArray}, select_keyname::AbstractString, select_filter)
+        -> indices_subset, dim_subset, coords_used
 
-Filter dimension `dim` according to key `select_dimvals` and `select_filter` (typically a single value or a range)
+Filter indices from dimension `dim` according to key `select_keyname` and `select_filter` (typically a single value or a range)
 
 Filtering may be applied either to dimension indices from `dim`, or to coordinates from `coords`:
-- If `select_dimvals` is of form "<dimname>_isel", use dimension indices and return `coords_used=nothing`
+- If `select_keyname` is of form "<dimname>_isel", use dimension indices and return `coords_used=nothing`
 - Otherwise use coordinate values and return actual coordinate values used in `coords_used`
 
-`cidx` are the filtered indices to use:
-- if `cidx` is a scalar (an Int), `dim_subset=nothing` and `coords_subset=nothing` indicating this dimension should be squeezed out
-- otherwise `cidx` is a Vector and `dim_subset` and `coords_subset` are the filtered subset of `dim` and `coords`
+`indices_subset` are the filtered indices to use:
+- if `indices_subset` is a scalar (an Int), then `dim_subset=nothing` indicating this dimension should be squeezed out
+- otherwise `indices_subset` is a Vector and `dim_subset::PB.NamedDimension` has `dim_subset.size` corresponding to `indices_subset` used from `dim`
 """
-function dimscoord_subset(dim::PB.NamedDimension, coords::Vector{FieldArray}, select_dimvals::AbstractString, select_filter)
-    if length(select_dimvals) > 5 && select_dimvals[end-4:end] == "_isel"
-        @assert select_dimvals[1:end-5] == dim.name
-        cidx = select_filter
+function _dim_subset(dim::PB.NamedDimension, coords::Vector{FieldArray}, select_keyname::AbstractString, select_filter)
+    if length(select_keyname) > 5 && select_keyname[end-4:end] == "_isel"
+        @assert select_keyname[1:end-5] == dim.name
+        indices_subset = select_filter
         coords_used=nothing
     else
-        # find cidx corresponding to a coordinate
+        # find indices_subset corresponding to a coordinate
         # find coordinate to use in coords
-        ccidx = findfirst(c -> c.name == select_dimvals, coords)
+        ccidx = findfirst(c -> c.name == select_keyname, coords)
         @assert !isnothing(ccidx)
         cc = coords[ccidx]
-        cidx, cvalue = find_indices(cc.values, select_filter)
+        indices_subset, cvalue = _find_indices(cc.values, select_filter)
         # reset to the value actually used
         coords_used = cvalue
     end
 
-    if cidx isa AbstractVector
-        dim_subset = PB.NamedDimension(dim.name, length(cidx))
-        coords_subset = FieldArray[]
-        for c in coords
-            is_coordinate(c, dim) ||
-                error("dimension $dim invalid coordinate $c")
-            if is_boundary_coordinate(c)
-                # c has 2 dimensions, (bounds, dim.name)
-                @assert c.dims_coords[2][1] == dim
-                coords_subset_dims = [ 
-                    c.dims_coords[1], # bounds
-                    dim_subset => FieldArray[]
-                ]
-                cs = FieldArray(c.name, c.values[:, cidx], coords_subset_dims, c.attributes)
-            else
-                # c has 1 dimension == dim
-                @assert c.dims_coords[1][1] == dim
-                cs = FieldArray(c.name, c.values[cidx], [dim_subset => FieldArray[]], c.attributes)
-            end
-            push!(coords_subset, cs)
-        end
+    if indices_subset isa AbstractVector
+        dim_subset = PB.NamedDimension(dim.name, length(indices_subset))
     else
         # squeeze out dimensions
         dim_subset = nothing
-        coords_subset = nothing
     end
 
-    return cidx, dim_subset, coords_subset, coords_used
+    return indices_subset, dim_subset, coords_used
 end
 
-# test whether c::FieldArray is a valid coordinate for dimension nd
-function is_coordinate(c::FieldArray, nd::PB.NamedDimension)
-    if length(c.dims_coords) == 1 && c.dims_coords[1][1] == nd
-        return true
-    elseif is_boundary_coordinate(c) && c.dims_coords[2][1] == nd
-        return true
+# Select region from coord::FieldArray, given selectdimindices, a Dict(dimname=>dimindices, ...) of 
+# indices to keep for each dimension that should be filtered.
+# NB: 
+# - intended for use with a `coord::FieldArray` without attached coordinates, any attached coordinates are just dropped
+# - any dimensions with single index in selectdimindices are squeezed out
+# - any dimension not present in selectdimindices has no filter applied
+function _select_dims_indices(coord::FieldArray, selectdimindices::Dict{String, Any})
+    dims = PB.get_dimensions(coord)
+
+    select_indices = []
+    select_dims = PB.NamedDimension[]
+    for nd in dims
+        if haskey(selectdimindices, nd.name)
+            dimindices = selectdimindices[nd.name]
+            push!(select_indices, dimindices)
+            if length(dimindices) > 1
+                # subset
+                push!(select_dims, PB.NamedDimension(nd.name, length(dimindices)))
+            else
+                # squeeze out
+            end                
+        else
+            # retain full dimension
+            push!(select_indices, 1:nd.size)
+            push!(select_dims, nd)
+        end
     end
-    return false
+
+    select_dims_nocoords = Pair{PB.NamedDimension, Vector{FieldArray}}[
+        d => FieldArray[] for d in select_dims
+    ]
+
+    avalues = Array{eltype(coord.values), length(select_dims)}(undef, [nd.size for nd in select_dims]...)
+
+    if isempty(select_dims) # 0D array
+        avalues[] = coord.values[select_indices...]
+    else
+        avalues[fill(Colon(), length(select_dims))...] .= @view coord.values[select_indices...]
+    end
+
+    return FieldArray(coord.name, avalues, select_dims_nocoords, copy(coord.attributes))
 end
 
-is_boundary_coordinate(c::FieldArray) =
-    length(c.dims_coords) == 2 && c.dims_coords[1][1] == PB.NamedDimension("bnds", 2)
