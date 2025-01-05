@@ -148,11 +148,19 @@ Return the [`PALEOmodel.FieldRecord`](@ref) for `varname`.
 function PB.get_field(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString) end
 
 """
-    get_data(output::PALEOmodel.AbstractOutputWriter, varname; records=nothing) -> values
+    get_data(output::PALEOmodel.AbstractOutputWriter, varname; records=nothing, kwargs...) -> values
 
-Get Variable `varname` raw data array, optionally restricting to `records`
+Get Variable `varname` raw data array, optionally restricting to `records`.
+
+Equivalent to `PB.get_data(PB.get_field(output, varname); records, kwargs...)`,
+see [`PB.get_data(fr::PALEOmodel.FieldRecord)`](@ref).
 """
-function PB.get_data(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; records=nothing) end
+function PB.get_data(output::PALEOmodel.AbstractOutputWriter, varname::AbstractString; records=nothing, kwargs...)
+
+    fr = PB.get_field(output, varname)
+
+    return PB.get_data(fr; records, kwargs...)
+end
 
 """
     get_mesh(output::PALEOmodel.AbstractOutputWriter, domainname::AbstractString) -> grid::Union{AbstractMesh, Nothing}
@@ -464,12 +472,12 @@ function PB.get_field(odom::OutputMemoryDomain, varname_or_varnamefull::Abstract
     return fr
 end
 
-function PB.get_data(output::OutputMemoryDomain, varname::AbstractString; records=nothing)
+function PB.get_data(odom::OutputMemoryDomain, varname::AbstractString; records=nothing, kwargs...)
+    @warn "get_data(odom::OutputMemoryDomain, ...) is deprecated, Domain name $(odom.name) varname $varname"
+    fr = PB.get_field(odom, varname)
 
-    fr = PB.get_field(output, varname)
-
-    return PB.get_data(fr; records)
-end    
+    return PALEOmodel.get_data(fr; records, kwargs...)
+end
 
 function PB.show_variables(
     odom::OutputMemoryDomain; 
@@ -495,14 +503,18 @@ end
 
 
 function PB.get_table(
-    odom::OutputMemoryDomain, varnames::Vector{<:AbstractString} = AbstractString[],
+    odom::OutputMemoryDomain, varnames::Vector{<:AbstractString} = AbstractString[];
+    squeeze_all_single_dims=true,
 )
     df = DataFrames.DataFrame(
-        [k => v.records for (k, v) in odom.data if (isempty(varnames) || string(k) in varnames)]
+        # [k => v.records for (k, v) in odom.data if (isempty(varnames) || string(k) in varnames)]
+        [vn => PB.get_data(fr; squeeze_all_single_dims) for (vn, fr) in odom.data if (isempty(varnames) || string(vn) in varnames)]
     )
 
     return df    
 end
+
+
 
 function PB.get_dimensions(odom::OutputMemoryDomain)
     spatial_dims = isnothing(odom.grid) ? PB.NamedDimension[] : PB.get_dimensions(odom.grid)
@@ -597,14 +609,16 @@ function PB.get_table(output::OutputMemory, domainname::AbstractString, varnames
     return PB.get_table(output.domains[domainname], varnames)
 end
 
-function PB.get_table(output::OutputMemory, varnamefulls::Vector{<:AbstractString})
+function PB.get_table(output::OutputMemory, varnamefulls::Vector{<:AbstractString};
+    squeeze_all_single_dims=true,
+)
     df = DataFrames.DataFrame()
 
     for varnamefull in varnamefulls
         vdom, varname = domain_variable_name(varnamefull)
         if haskey(output.domains, vdom)
             if PB.has_variable(output.domains[vdom], varname)
-                vardata = PB.get_data(output.domains[vdom], varname)
+                vardata = PB.get_data(output.domains[vdom], varname; squeeze_all_single_dims=true)
                 df = DataFrames.insertcols!(df, varnamefull=>vardata)
             else
                 @warn "no Variable found for $varnamefull"
@@ -772,17 +786,6 @@ function PB.add_field!(output::OutputMemory, fr::PALEOmodel.FieldRecord)
     return PB.add_field!(output.domains[domainname], fr)
 end
 
-function PB.get_data(output::OutputMemory, varnamefull::AbstractString; records=nothing)
-
-    domainname, varname = domain_variable_name(varnamefull, defaultdomainname=nothing)
-    
-    haskey(output.domains, domainname) || 
-        error("Variable $varnamefull not found in output: domain $(domainname) not present")
-
-    odom = output.domains[domainname]
-
-    return PB.get_data(odom, varname; records)
-end    
 
 
 ###########################
