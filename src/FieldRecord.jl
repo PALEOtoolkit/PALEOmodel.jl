@@ -481,7 +481,7 @@ Base.getindex(rv::FieldRecordValues{E, R, Nothing, 1, 1, false, false, N}, i, j)
 
 Base.size(rv::FieldRecordValues{E, R, LI, NumSpatialDims, NumDataDims, false, false, N}) where {
     E, R, LI, NumSpatialDims, NumDataDims, N,
-} = (size(rv.linear_index)..., size(first(rv.records))[2:end])
+} = (size(rv.linear_index)..., size(first(rv.records))[2:end]...)
 function Base.getindex(rv::FieldRecordValues{E, R, LI, 2, 0, false, false, N}, i, j) where {E, R, LI, N}
     linear_idx = rv.linear_index[i, j]
     return ismissing(linear_idx) ? missing : rv.records[1][linear_idx]
