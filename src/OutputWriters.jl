@@ -1492,7 +1492,7 @@ function netcdf_to_grid(::Type{PB.Grids.CartesianArrayGrid}, ds::NCDatasets.Data
 
     coordinates = netcdf_to_coordnames(ds, "PALEO_grid_coords")
 
-    grid = PB.Grids.CartesianArrayGrid{length(dims)}(
+    grid = PB.Grids.CartesianArrayGrid{length(dimensions)}(
         ncells,
         dimensions, dimensions_extra,
         londim, latdim, zdim,
