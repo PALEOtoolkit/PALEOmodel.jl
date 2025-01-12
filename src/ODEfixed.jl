@@ -4,8 +4,10 @@ module ODEfixed
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
 
+@public integrateEuler, integrateSplitEuler, integrateEulerthreads, integrateSplitEulerthreads
 
 ###########################################################################
 # Fixed-timestep, first-order Euler integrators 

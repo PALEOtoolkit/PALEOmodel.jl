@@ -7,15 +7,15 @@ module OutputWriters
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
 
 import OrderedCollections
 import DataFrames
 import FileIO
 import NCDatasets
 
-import Infiltrator # Julia debugger
-
+@public initialize!, add_record!, OutputMemoryDomain, OutputMemory, save_netcdf, load_netcdf!
 
 ##################################
 # AbstractOutputWriter interface
@@ -51,8 +51,8 @@ PALEOmodel.AbstractOutputWriter
 
 """
     initialize!(
-        output::PALEOmodel.AbstractOutputWriter, model, modeldata, [nrecords] 
-        [;record_dim_name=:tmodel] [record_coord_units="yr"]
+        output::PALEOmodel.AbstractOutputWriter, model, modeldata, [nrecords]; 
+        [record_dim_name=:tmodel] [record_coord_name=record_dim_name] [record_coord_units="yr"]
     )
 
 Initialize from a PALEOboxes::Model, optionally reserving memory for an assumed output dataset of `nrecords`.

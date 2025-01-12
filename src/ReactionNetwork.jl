@@ -15,8 +15,11 @@ module ReactionNetwork
 import Printf
 import Requires
 import PALEOboxes as PB
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
 import DataFrames
+
+@public get_ratetable, get_all_species_ratevars, get_rates, get_all_species_ratesummaries, show_ratesummaries
 
 """
     add_equations!(ratetable)

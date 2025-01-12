@@ -2,7 +2,8 @@ module JacobianAD
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
 import ..SolverFunctions
 import ..SparseUtils
 
@@ -17,6 +18,8 @@ import SparseDiffTools
 import SparsityTracing
 
 import TimerOutputs: @timeit, @timeit_debug
+
+@public jac_config_ode, paramjac_config_ode, jac_config_dae
 
 # moved to SolverFunctions
 # Base.@deprecate_binding DerivForwardDiff  SolverFunctions.DerivForwardDiff

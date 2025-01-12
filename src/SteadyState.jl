@@ -2,7 +2,8 @@ module SteadyState
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
 
 import LinearAlgebra
 import SparseArrays
@@ -15,6 +16,9 @@ import ..JacobianAD
 import ..SplitDAE
 
 import TimerOutputs: @timeit, @timeit_debug
+
+@public steadystate, steadystateForwardDiff, steadystate_ptc, steadystate_ptcForwardDiff, steadystate_ptc_splitdae
+@public ConservationCallback, RestartSmallValuesCallback, CheckValuesCallback
 
 ##############################################################
 # Solve for steady state using NLsolve.jl

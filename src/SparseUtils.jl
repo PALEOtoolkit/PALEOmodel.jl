@@ -7,7 +7,6 @@ module SparseUtils
 
 import SparseArrays
 import LinearAlgebra
-import Infiltrator
 
 """
     add_sparse_fixed!(A::SparseMatrixCSC, B::SparseMatrixCSC)

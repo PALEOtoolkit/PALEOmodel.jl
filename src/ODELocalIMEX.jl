@@ -4,13 +4,16 @@ import Infiltrator
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
 import ..NonLinearNewton
 
 import Logging
 import LinearAlgebra
 import ForwardDiff
 import StaticArrays
+
+@public integrateLocalIMEXEuler
 
 """
     integrateLocalIMEXEuler(run, initial_state, modeldata, tspan, Δt_outer [; kwargs...])
