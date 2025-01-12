@@ -1,5 +1,4 @@
 import RecipesBase
-import Infiltrator
 
 ###########################
 # PlotPager

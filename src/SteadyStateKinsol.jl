@@ -2,7 +2,8 @@ module SteadyStateKinsol
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
 
 import Sundials
 using LinearAlgebra
@@ -12,6 +13,7 @@ using ForwardDiff
 using SparseArrays
 using SparseDiffTools
 
+@public steadystate_ptc
 
 """
     steadystate_ptc(run, initial_state, modeldata, tspan, deltat_initial; 

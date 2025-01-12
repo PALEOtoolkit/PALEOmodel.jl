@@ -5,6 +5,9 @@
 """
 module ThreadBarriers
 
+using ...PALEOmodel: @public
+
+@public ThreadBarrierAtomic
 
 """
     wait_barrier(barrier::Nothing)

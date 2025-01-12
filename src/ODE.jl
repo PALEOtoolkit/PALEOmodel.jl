@@ -2,7 +2,9 @@ module ODE
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
+
 import ..SolverFunctions
 
 import LinearAlgebra
@@ -22,6 +24,9 @@ import Infiltrator
 import Sundials
 import SciMLBase
 
+@public ODEfunction, DAEfunction
+@public integrate, integrateForwardDiff, integrateDAE, integrateDAEForwardDiff, get_inconsistent_initial_deriv
+@public print_sol_stats, calc_output_sol!
 
 Base.@deprecate_binding ModelODE SolverFunctions.ModelODE
 # Base.@deprecate_binding ModelDAE SolverFunctions.ModelDAE

@@ -7,7 +7,8 @@ module SolverFunctions
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
+using ...PALEOmodel: @public
 
 import LinearAlgebra
 import SparseArrays
@@ -16,7 +17,11 @@ import SparseDiffTools
 import MultiFloats
 import Sparspak
 
-# import Infiltrator # Julia debugger
+@public StepClampMultAll!, StepClampAll!, ClampAll, ClampAll!, SparseLinsolveUMFPACK, SparseLinsolveSparspak64x2
+@public ModelODE, ModelODE_at_t, ModelODE_p_at_t, ModelODE_u_at_t
+@public JacODEForwardDiffDense, JacODEForwardDiffDense_p, JacODEForwardDiffSparse, JacODE_at_t
+@public ParamJacODEForwardDiffDense, ParamJacODEForwardDiffDenseT
+@public ModelDAE, JacDAE, TotalForwardDiff, ImplicitForwardDiffDense, ImplicitForwardDiffSparse
 
 #####################################################################################
 # Adaptors and function objects for NLsolve (non-linear steady-state solvers)
@@ -84,7 +89,7 @@ end
 (ca::ClampAll!)(v) = clamp!(v, ca.minvalue, ca.maxvalue)
 
 """
-    ca = ClampAll(minvalue, maxvalue)
+    ClampAll(minvalue, maxvalue) -> ca
     ca(v) -> v
 
 Function object to clamp all values in Vector `v` to specified range using

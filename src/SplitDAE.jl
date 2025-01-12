@@ -2,7 +2,7 @@ module SplitDAE
 
 import PALEOboxes as PB
 
-import PALEOmodel
+import ...PALEOmodel
 
 import LinearAlgebra
 import SparseArrays
