@@ -1,4 +1,3 @@
-import Infiltrator
 
 function f!(resid, x, userdata=nothing)
     for i in eachindex(x)
