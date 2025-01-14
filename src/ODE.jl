@@ -10,7 +10,6 @@ import ..SolverFunctions
 import LinearAlgebra
 import SparseArrays
 import Logging
-import Infiltrator
 
 # See http://www.stochasticlifestyle.com/differentialequations-jl-3-0-roadmap-4-0/
 # for summary of state of DifferentialEquations.jl

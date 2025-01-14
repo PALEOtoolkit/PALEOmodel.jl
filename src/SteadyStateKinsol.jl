@@ -7,7 +7,6 @@ using ...PALEOmodel: @public
 
 import Sundials
 using LinearAlgebra
-import Infiltrator
 
 using ForwardDiff
 using SparseArrays

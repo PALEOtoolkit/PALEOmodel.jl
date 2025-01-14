@@ -8,7 +8,6 @@ import ..SolverFunctions
 import ..SparseUtils
 
 import LinearAlgebra
-import Infiltrator
 
 import Logging
 

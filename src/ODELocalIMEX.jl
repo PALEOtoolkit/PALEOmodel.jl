@@ -1,7 +1,5 @@
 module ODELocalIMEX
 
-import Infiltrator
-
 import PALEOboxes as PB
 
 import ...PALEOmodel
